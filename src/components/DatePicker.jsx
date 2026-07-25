@@ -1,0 +1,1 @@
+import {getTodayJalali}from'../lib/jalali';export default function DatePicker({value,onChange,label}){return <label><span className="label">{label||'تاریخ جلالی'}</span><input className="field tnum" dir="ltr" value={value||getTodayJalali()} onChange={e=>onChange(e.target.value)} placeholder="۱۴۰۵/۰۱/۰۱"/></label>}
