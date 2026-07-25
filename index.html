@@ -1,0 +1,1786 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="theme-color" content="#14B8A6" id="themeColorMeta">
+<title>دفترحساب</title>
+<link rel="manifest" id="manifestLink">
+<link rel="apple-touch-icon" id="appleTouchIcon">
+<style>
+  @font-face{
+    font-family:'Vazirmatn';
+    src:local('Vazirmatn');
+    font-weight:100 900;
+  }
+  @font-face{
+    font-family:'IranSans';
+    src:local('IRANSans'),local('IRANSansX');
+    font-weight:100 900;
+  }
+  html,body{margin:0;padding:0;height:100%;}
+  body{
+    font-family:'Vazirmatn','IranSans','Tahoma',sans-serif;
+    -webkit-tap-highlight-color:transparent;
+    overscroll-behavior:none;
+  }
+  .tnum{direction:ltr;unicode-bidi:plaintext;font-variant-numeric:tabular-nums;display:inline-block;}
+  ::-webkit-scrollbar{width:6px;height:6px;}
+  ::-webkit-scrollbar-thumb{background:#0002;border-radius:8px;}
+  .safe-top{padding-top:env(safe-area-inset-top);}
+  .safe-bottom{padding-bottom:env(safe-area-inset-bottom);}
+  @keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
+  @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+  @keyframes splashOut{to{opacity:0;visibility:hidden}}
+  @keyframes popIn{from{transform:scale(.85);opacity:0}to{transform:scale(1);opacity:1}}
+  .anim-sheet{animation:slideUp .28s cubic-bezier(.2,.8,.2,1)}
+  .anim-fade{animation:fadeIn .2s ease}
+  .anim-pop{animation:popIn .25s cubic-bezier(.34,1.56,.64,1)}
+  #splash{
+    position:fixed;inset:0;z-index:9999;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;color:#fff;
+    transition:opacity .5s ease;
+  }
+  #splash.hide{opacity:0;pointer-events:none;}
+  .dot-flash{width:8px;height:8px;border-radius:50%;background:#fff;opacity:.4;animation:dotFlash 1s infinite ease-in-out;}
+  @keyframes dotFlash{0%,100%{opacity:.3;transform:scale(.8)}50%{opacity:1;transform:scale(1.15)}}
+  input[type="date"]::-webkit-calendar-picker-indicator{display:none;}
+  .no-scrollbar::-webkit-scrollbar{display:none;}
+</style>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone@7/babel.min.js" crossorigin></script>
+</head>
+<body>
+<div id="splash">
+  <div id="splashInner" style="text-align:center">
+    <div style="width:72px;height:72px;border-radius:20px;background:#fff3;display:flex;align-items:center;justify-content:center;margin:0 auto 14px;animation:popIn .5s cubic-bezier(.34,1.56,.64,1)">
+      <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 3 7v6c0 5 4 9 9 9s9-4 9-9V7l-9-5Z"/><path d="M9 12l2 2 4-4"/></svg>
+    </div>
+    <div style="font-size:20px;font-weight:700;margin-bottom:14px">دفترحساب</div>
+    <div style="display:flex;gap:6px;justify-content:center">
+      <div class="dot-flash" style="animation-delay:0s"></div>
+      <div class="dot-flash" style="animation-delay:.15s"></div>
+      <div class="dot-flash" style="animation-delay:.3s"></div>
+    </div>
+  </div>
+</div>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo, useRef, useCallback } = React;
+
+/* =========================================================================
+   SECTION 1: STORAGE (localStorage wrapper)
+========================================================================= */
+const ACC = "acc"; // account/app prefix
+async function readStorage(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw === null || raw === undefined) return fallback;
+    return JSON.parse(raw);
+  } catch (e) { return fallback; }
+}
+async function writeStorage(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); return true; }
+  catch (e) { console.error("writeStorage failed", e); return false; }
+}
+function readSync(key, fallback) {
+  try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : fallback; }
+  catch (e) { return fallback; }
+}
+function writeSync(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) {}
+}
+function uid() {
+  return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+}
+
+const KEYS = {
+  ledger: "ledger:acc",
+  incomes: "incomes:acc",
+  invoices: "invoices:acc",
+  customers: "customers:acc",
+  inventory: "inventory:acc",
+  security: "acc:security",
+  invoiceBrand: "invoiceBrand:acc",
+  uiPrefs: "acc:uiPrefs",
+  theme: "theme:acc",
+  amountHidden: "amountHidden:acc",
+  chartMode: "acc:chartMode",
+};
+
+/* =========================================================================
+   SECTION 2: JALALI CALENDAR
+========================================================================= */
+function div(a, b) { return Math.floor(a / b); }
+function g2j(gy, gm, gd) {
+  const g_d_m = [0,31,59,90,120,151,181,212,243,273,304,334];
+  let jy = (gy <= 1600) ? 0 : 979;
+  gy -= (gy <= 1600) ? 621 : 1600;
+  const gy2 = (gm > 2) ? (gy + 1) : gy;
+  let days = 365*gy + div(gy2+3,4) - div(gy2+99,100) + div(gy2+399,400) - 80 + gd + g_d_m[gm-1];
+  jy += 33 * div(days, 12053); days %= 12053;
+  jy += 4 * div(days, 1461); days %= 1461;
+  jy += div(days - 1, 365);
+  if (days > 365) days = (days - 1) % 365;
+  const jm = (days < 186) ? 1 + div(days,31) : 7 + div(days-186,30);
+  const jd = 1 + ((days < 186) ? (days % 31) : ((days - 186) % 30));
+  return [jy, jm, jd];
+}
+function j2g(jy, jm, jd) {
+  let gy = (jy <= 979) ? 621 : 1600;
+  jy -= (jy <= 979) ? 0 : 979;
+  let days = 365*jy + div(jy,33)*8 + div((jy%33)+3,4) + 78 + jd + ((jm < 7) ? (jm-1)*31 : ((jm-7)*30)+186);
+  gy += 400 * div(days, 146097); days %= 146097;
+  if (days > 36524) { gy += 100*div(--days,36524); days %= 36524; if (days >= 365) days++; }
+  gy += 4 * div(days, 1461); days %= 1461;
+  gy += div(days - 1, 365);
+  if (days > 365) days = (days - 1) % 365;
+  let gd = days + 1;
+  const isLeap = (gy%4===0 && gy%100!==0) || gy%400===0;
+  const sal = [0,31,isLeap?29:28,31,30,31,30,31,31,30,31,30,31];
+  let gm;
+  for (gm=0; gm<13; gm++){ const v=sal[gm]; if (gd<=v) break; gd -= v; }
+  return [gy, gm, gd];
+}
+const JMONTHS = ["فروردین","اردیبهشت","خرداد","تیر","مرداد","شهریور","مهر","آبان","آذر","دی","بهمن","اسفند"];
+function todayISO() { const d = new Date(); return d.toISOString().slice(0,10); }
+function isoToJalali(iso) {
+  if (!iso) return null;
+  const [gy,gm,gd] = iso.split("-").map(Number);
+  return g2j(gy, gm, gd);
+}
+function jalaliToISO(jy, jm, jd) {
+  const [gy,gm,gd] = j2g(jy, jm, jd);
+  return `${String(gy).padStart(4,"0")}-${String(gm).padStart(2,"0")}-${String(gd).padStart(2,"0")}`;
+}
+function formatJalali(iso, withTime) {
+  if (!iso) return "—";
+  const j = isoToJalali(iso.slice(0,10));
+  if (!j) return "—";
+  return `${toFa(j[2])} ${JMONTHS[j[1]-1]} ${toFa(j[0])}`;
+}
+function toFa(n) { return new Intl.NumberFormat("fa-IR").format(n); }
+function toMoney(n) { return new Intl.NumberFormat("fa-IR").format(Math.round(n||0)); }
+function daysDiff(iso) {
+  if (!iso) return null;
+  const a = new Date(iso+"T00:00:00");
+  const b = new Date(todayISO()+"T00:00:00");
+  return Math.round((a-b)/86400000);
+}
+
+/* =========================================================================
+   SECTION 3: I18N
+========================================================================= */
+const I18N = {
+  fa: {
+    appName:"دفترحساب", financeMgmt:"مدیریت مالی",
+    home:"خانه", ledger:"بدهی و طلب", income:"درآمد", invoices:"فاکتورها", management:"مدیریت",
+    personalInvoice:"فاکتور شخصی", warehouse:"انبار", settings:"تنظیمات",
+    reminders:"یادآوری‌ها", noReminders:"یادآوری ثبت نشده است.",
+    netWorth:"ارزش خالص حساب", openDebt:"بدهی باز", openCredit:"طلب باز", overdueInvoice:"فاکتور معوق",
+    recentActivity:"فعالیت اخیر", noRecords:"هنوز رکوردی ثبت نشده است.",
+    addRecord:"ثبت رکورد جدید", debt:"بدهی به دیگران", credit:"طلب از دیگران",
+    party:"طرف حساب", amount:"مبلغ", note:"بابت چی", date:"تاریخ", dueDate:"سررسید پرداخت (اختیاری)",
+    settle:"تسویه", settledFull:"این رکورد کاملاً تسویه شده است.", remaining:"مانده",
+    searchParty:"جستجوی طرف‌حساب...", save:"ذخیره", cancel:"انصراف", delete:"حذف", edit:"ویرایش",
+    add:"افزودن", close:"بستن", confirm:"تأیید",
+    incomeSource:"منبع درآمد", totalIncome:"مجموع درآمد", newIncome:"ثبت درآمد جدید",
+    sourceSale:"فروش محصول", sourceSalary:"حقوق", sourceProject:"پروژه", sourceInvest:"سرمایه‌گذاری", sourceOther:"سایر",
+    newInvoice:"ساخت فاکتور جدید", selectCustomer:"انتخاب مشتری", noCustomerInvoice:"فاکتور بدون مشتری",
+    addItem:"افزودن قلم", itemDesc:"شرح", unitPrice:"قیمت واحد", qty:"تعداد", total:"جمع کل",
+    issueDate:"تاریخ صدور", paid:"پرداخت‌شده", unpaid:"پرداخت‌نشده",
+    searchCustomerOrInvoice:"جستجوی مشتری یا شماره فاکتور",
+    customers:"مشتریان", inventory:"انبار", addCustomer:"افزودن مشتری", name:"نام", phone:"شماره تماس",
+    address:"آدرس", notes:"یادداشت", searchNamePhone:"جستجو (نام یا شماره)",
+    itemName:"نام کالا", category:"دسته‌بندی", price:"قیمت واحد (تومان)", unit:"واحد",
+    initialStock:"موجودی اولیه", minStock:"حداقل موجودی (آستانه هشدار)", location:"محل نگهداری",
+    photo:"عکس کالا", addItemBtn:"افزودن کالا", currentStock:"موجودی فعلی", lowStock:"کم‌موجودی",
+    stockIn:"ورود", stockOut:"خروج", stockInTitle:"ثبت ورود کالا", stockOutTitle:"ثبت خروج کالا",
+    filterAll:"همه", searchNameCategoryLocation:"جستجوی نام/دسته/محل",
+    inventoryReport:"گزارش انبار و کم‌موجودی", lowStockItems:"کالاهای کم‌موجودی",
+    allStockOk:"همه موجودی‌ها در سطح مناسب هستند.", moveHistory:"تاریخچه ورود و خروج",
+    filters:"فیلترها", clearFilters:"پاک‌کردن فیلترها", fromDate:"از تاریخ", toDate:"تا تاریخ",
+    type:"نوع", results:"نتیجه",
+    themeDesign:"پوسته و دیزاین", appLanguage:"زبان برنامه", persian:"فارسی", arabic:"العربية",
+    langHint:"زبان رابط کاربری را انتخاب کنید. انتخاب شما ذخیره می‌شود.",
+    fontCustom:"شخصی‌سازی فونت", fontType:"نوع فونت", fontSize:"اندازه فونت",
+    small:"کوچک", medium:"متوسط", large:"بزرگ", systemFont:"فونت سیستم",
+    invoiceBrand:"برندینگ فاکتور", logo:"لوگو", issuerName:"نام صادرکننده", issuedBy:"صادر شده توسط",
+    taxId:"شناسه مالیاتی", finalNote:"یادداشت پایانی فاکتور",
+    security:"امنیت", setPin:"تنظیم رمز عبور", changePin:"تغییر رمز", disablePin:"غیرفعال‌کردن رمز",
+    biometric:"ورود با اثر انگشت/بیومتریک", notAvailableDevice:"روی این دستگاه در دسترس نیست",
+    backup:"پشتیبان‌گیری از داده‌ها", downloadBackup:"دانلود فایل پشتیبان", restoreBackup:"بازگردانی داده‌ها",
+    invalidBackup:"فایل پشتیبان معتبر نیست.", restoreWarning:"با بازگردانی، تمام داده‌های فعلی جایگزین می‌شوند. ادامه می‌دهید؟",
+    appLocked:"برنامه قفل است", enterPin:"رمز عبور را وارد کنید", wrongPin:"رمز اشتباه است",
+    fingerprintLogin:"ورود با اثر انگشت", drawer_settings:"تنظیمات",
+    debtLabel:"بدهی", creditLabel:"طلب", partyRequired:"لطفاً همه فیلدهای لازم را پر کنید.",
+    lowStockWord:"کم‌موجودی", management_customers:"مشتریان", management_inventory:"انبار",
+    reportOnlyHint:"این صفحه فقط گزارش‌گیری است — افزودن/ویرایش از تب مدیریت→انبار انجام می‌شود.",
+    noItems:"کالایی ثبت نشده است.", noCustomers:"مشتری‌ای ثبت نشده است.", noInvoices:"فاکتوری ثبت نشده است.",
+    paymentHistory:"تاریخچه پرداخت‌ها", addPayment:"ثبت پرداخت", amountPaid:"مبلغ پرداختی",
+    chartBar:"میله‌ای", chartLine:"خطی", show:"نمایش", hide:"مخفی",
+    pinMinDigits:"رمز باید حداقل ۴ رقم باشد.", pinMismatch:"رمزها یکسان نیستند.", pinSet:"رمز عبور تنظیم شد.",
+    currentPin:"رمز فعلی", newPin:"رمز جدید", confirmPin:"تکرار رمز جدید", pinDisabled:"رمز عبور غیرفعال شد.",
+    downloadImg:"دانلود تصویر", copyImg:"کپی تصویر", copyText:"کپی متن", shareInvoice:"اشتراک‌گذاری",
+    invoiceStatusCheck:"بررسی وضعیت فاکتور", scanQR:"اسکن کد QR", cameraNotAvailable:"دوربین در این مرورگر در دسترس نیست.",
+    qrNotRelated:"این کد به فاکتوری در این برنامه مرتبط نیست.",
+    all:"همه کالاها",
+  },
+  ar: {
+    appName:"دفترحساب", financeMgmt:"الإدارة المالية",
+    home:"الرئيسية", ledger:"الديون والمستحقات", income:"الدخل", invoices:"الفواتير", management:"الإدارة",
+    personalInvoice:"فاتورة شخصية", warehouse:"المخزن", settings:"الإعدادات",
+    reminders:"التذكيرات", noReminders:"لا توجد تذكيرات مسجلة.",
+    netWorth:"صافي قيمة الحساب", openDebt:"دين مفتوح", openCredit:"مستحق مفتوح", overdueInvoice:"فاتورة متأخرة",
+    recentActivity:"النشاط الأخير", noRecords:"لم يتم تسجيل أي سجل بعد.",
+    addRecord:"تسجيل سجل جديد", debt:"دين لآخرين", credit:"مستحق من آخرين",
+    party:"الطرف", amount:"المبلغ", note:"البيان", date:"التاريخ", dueDate:"تاريخ الاستحقاق (اختياري)",
+    settle:"تسوية", settledFull:"تمت تسوية هذا السجل بالكامل.", remaining:"المتبقي",
+    searchParty:"البحث عن الطرف...", save:"حفظ", cancel:"إلغاء", delete:"حذف", edit:"تعديل",
+    add:"إضافة", close:"إغلاق", confirm:"تأكيد",
+    incomeSource:"مصدر الدخل", totalIncome:"إجمالي الدخل", newIncome:"تسجيل دخل جديد",
+    sourceSale:"بيع منتج", sourceSalary:"راتب", sourceProject:"مشروع", sourceInvest:"استثمار", sourceOther:"أخرى",
+    newInvoice:"إنشاء فاتورة جديدة", selectCustomer:"اختيار العميل", noCustomerInvoice:"فاتورة بدون عميل",
+    addItem:"إضافة عنصر", itemDesc:"الوصف", unitPrice:"سعر الوحدة", qty:"الكمية", total:"الإجمالي",
+    issueDate:"تاريخ الإصدار", paid:"مدفوعة", unpaid:"غير مدفوعة",
+    searchCustomerOrInvoice:"البحث عن عميل أو رقم فاتورة",
+    customers:"العملاء", inventory:"المخزن", addCustomer:"إضافة عميل", name:"الاسم", phone:"رقم الهاتف",
+    address:"العنوان", notes:"ملاحظات", searchNamePhone:"بحث (الاسم أو الرقم)",
+    itemName:"اسم المنتج", category:"الفئة", price:"سعر الوحدة", unit:"الوحدة",
+    initialStock:"المخزون الأولي", minStock:"الحد الأدنى للمخزون", location:"موقع التخزين",
+    photo:"صورة المنتج", addItemBtn:"إضافة منتج", currentStock:"المخزون الحالي", lowStock:"مخزون منخفض",
+    stockIn:"إدخال", stockOut:"إخراج", stockInTitle:"تسجيل إدخال", stockOutTitle:"تسجيل إخراج",
+    filterAll:"الكل", searchNameCategoryLocation:"بحث بالاسم/الفئة/الموقع",
+    inventoryReport:"تقرير المخزون والنقص", lowStockItems:"المنتجات منخفضة المخزون",
+    allStockOk:"جميع المخزونات في مستوى مناسب.", moveHistory:"سجل الإدخال والإخراج",
+    filters:"الفلاتر", clearFilters:"مسح الفلاتر", fromDate:"من تاريخ", toDate:"إلى تاريخ",
+    type:"النوع", results:"نتيجة",
+    themeDesign:"المظهر والتصميم", appLanguage:"لغة التطبيق", persian:"فارسی", arabic:"العربية",
+    langHint:"اختر لغة واجهة المستخدم. سيتم حفظ اختيارك.",
+    fontCustom:"تخصيص الخط", fontType:"نوع الخط", fontSize:"حجم الخط",
+    small:"صغير", medium:"متوسط", large:"كبير", systemFont:"خط النظام",
+    invoiceBrand:"هوية الفاتورة", logo:"الشعار", issuerName:"اسم المُصدر", issuedBy:"صادرة عن",
+    taxId:"الرقم الضريبي", finalNote:"ملاحظة ختامية للفاتورة",
+    security:"الأمان", setPin:"تعيين رمز", changePin:"تغيير الرمز", disablePin:"تعطيل الرمز",
+    biometric:"الدخول بالبصمة", notAvailableDevice:"غير متوفر على هذا الجهاز",
+    backup:"النسخ الاحتياطي للبيانات", downloadBackup:"تنزيل ملف النسخ الاحتياطي", restoreBackup:"استعادة البيانات",
+    invalidBackup:"ملف النسخ الاحتياطي غير صالح.", restoreWarning:"سيتم استبدال جميع البيانات الحالية. هل تريد المتابعة؟",
+    appLocked:"التطبيق مقفل", enterPin:"أدخل الرمز", wrongPin:"رمز خاطئ",
+    fingerprintLogin:"الدخول بالبصمة", drawer_settings:"الإعدادات",
+    debtLabel:"دين", creditLabel:"مستحق", partyRequired:"يرجى ملء جميع الحقول المطلوبة.",
+    lowStockWord:"مخزون منخفض", management_customers:"العملاء", management_inventory:"المخزن",
+    reportOnlyHint:"هذه الصفحة للعرض فقط — الإضافة/التعديل من تبويب الإدارة←المخزن.",
+    noItems:"لا توجد منتجات.", noCustomers:"لا يوجد عملاء.", noInvoices:"لا توجد فواتير.",
+    paymentHistory:"سجل الدفعات", addPayment:"تسجيل دفعة", amountPaid:"المبلغ المدفوع",
+    chartBar:"أعمدة", chartLine:"خطي", show:"إظهار", hide:"إخفاء",
+    pinMinDigits:"يجب أن يتكون الرمز من ٤ أرقام على الأقل.", pinMismatch:"الرموز غير متطابقة.", pinSet:"تم تعيين الرمز.",
+    currentPin:"الرمز الحالي", newPin:"رمز جديد", confirmPin:"تأكيد الرمز الجديد", pinDisabled:"تم تعطيل الرمز.",
+    downloadImg:"تنزيل الصورة", copyImg:"نسخ الصورة", copyText:"نسخ النص", shareInvoice:"مشاركة",
+    invoiceStatusCheck:"التحقق من حالة الفاتورة", scanQR:"مسح رمز QR", cameraNotAvailable:"الكاميرا غير متوفرة في هذا المتصفح.",
+    qrNotRelated:"هذا الرمز غير مرتبط بفاتورة في هذا التطبيق.",
+    all:"جميع المنتجات",
+  }
+};
+function tr(lang, key) {
+  return (I18N[lang] && I18N[lang][key]) || I18N.fa[key] || key;
+}
+
+/* =========================================================================
+   SECTION 4: THEMES
+========================================================================= */
+const THEMES = {
+  teal:    { name:"Teal",     brand:"#14B8A6", brandDark:"#0D9488", bg:"#F1F5F4", card:"#FFFFFF", border:"#E2E8E6", text:"#1F2937", muted:"#6B7280" },
+  ocean:   { name:"Ocean",    brand:"#2563EB", brandDark:"#1D4ED8", bg:"#EDF2FF", card:"#FFFFFF", border:"#DCE6FB", text:"#1F2937", muted:"#6B7280" },
+  sunset:  { name:"Sunset",   brand:"#E8610A", brandDark:"#C04F08", bg:"#FFF7F0", card:"#FFFFFF", border:"#F5E1CF", text:"#1F2937", muted:"#6B7280" },
+  midnight:{ name:"Midnight", brand:"#7C6EF0", brandDark:"#6557D4", bg:"#0F1117", card:"#181B24", border:"#2A2E3B", text:"#EDEEF2", muted:"#9198A8", dark:true },
+  rose:    { name:"Rose",     brand:"#8B004A", brandDark:"#650036", bg:"#FDF0F5", card:"#FFFFFF", border:"#F5DCE7", text:"#1F2937", muted:"#6B7280" },
+  forest:  { name:"Forest",   brand:"#16803C", brandDark:"#0F5C2A", bg:"#F0F7F0", card:"#FFFFFF", border:"#DCEBDC", text:"#1F2937", muted:"#6B7280" },
+};
+const FIXED_COLORS = { negative:"#EA3943", positive:"#16A34A", warning:"#F59E0B" };
+const AVATAR_PALETTE = ["#6AAE22","#2F80ED","#F2A93B","#EA3943","#8E5CF7","#16C784"];
+
+function hashStr(str) {
+  let h = 0;
+  for (let i=0;i<str.length;i++) { h = (h*31 + str.charCodeAt(i)) | 0; }
+  return Math.abs(h);
+}
+function colorForName(name) {
+  return AVATAR_PALETTE[hashStr(name||"?") % AVATAR_PALETTE.length];
+}
+
+function applyThemeVars(theme) {
+  const t = THEMES[theme] || THEMES.teal;
+  const root = document.documentElement;
+  root.style.setProperty("--brand", t.brand);
+  root.style.setProperty("--brandDark", t.brandDark);
+  root.style.setProperty("--bg", t.bg);
+  root.style.setProperty("--card", t.card);
+  root.style.setProperty("--border", t.border);
+  root.style.setProperty("--text", t.text);
+  root.style.setProperty("--muted", t.muted);
+  document.body.style.background = t.bg;
+  document.body.style.color = t.text;
+  const meta = document.getElementById("themeColorMeta");
+  if (meta) meta.setAttribute("content", t.brand);
+  const splash = document.getElementById("splash");
+  if (splash) splash.style.background = `linear-gradient(135deg, ${t.brand}, ${t.brandDark})`;
+  return t;
+}
+
+/* =========================================================================
+   SECTION 5: ICONS (inline SVG, feather-like)
+========================================================================= */
+const ic = (path, extra) => (props) => (
+  <svg width={props.size||20} height={props.size||20} viewBox="0 0 24 24" fill="none"
+       stroke={props.color||"currentColor"} strokeWidth={props.strokeWidth||2}
+       strokeLinecap="round" strokeLinejoin="round" style={props.style}>
+    {path}
+    {extra}
+  </svg>
+);
+const Icons = {
+  home: ic(<><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></>),
+  wallet: ic(<><path d="M3 7a2 2 0 0 1 2-2h13a1 1 0 0 1 1 1v3"/><path d="M3 7v10a2 2 0 0 0 2 2h14a1 1 0 0 0 1-1v-6a1 1 0 0 0-1-1h-4a2 2 0 1 0 0 4h5"/></>),
+  trendUp: ic(<><path d="m3 17 6-6 4 4 8-8"/><path d="M15 7h6v6"/></>),
+  invoice: ic(<><path d="M7 3h10a1 1 0 0 1 1 1v16l-3-2-2 2-2-2-2 2-3-2V4a1 1 0 0 1 1-1Z"/><path d="M9 8h6M9 12h6M9 16h3"/></>),
+  users: ic(<><circle cx="9" cy="8" r="3.2"/><path d="M2.5 20c0-3.5 3-6 6.5-6s6.5 2.5 6.5 6"/><path d="M16 8.2a3 3 0 1 1 3.5 3M18 14.2c2.3.4 3.5 2 3.5 4.8"/></>),
+  bell: ic(<><path d="M6 9a6 6 0 0 1 12 0c0 4 1.5 5.5 1.5 5.5H4.5S6 13 6 9Z"/><path d="M10 19a2 2 0 0 0 4 0"/></>),
+  menu: ic(<><path d="M4 6h16M4 12h16M4 18h16"/></>),
+  settings: ic(<><circle cx="12" cy="12" r="3"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></>),
+  box: ic(<><path d="M21 8 12 3 3 8v8l9 5 9-5V8Z"/><path d="M3 8l9 5 9-5M12 13v8"/></>),
+  chevronRight: ic(<path d="m9 18 6-6-6-6"/>),
+  chevronLeft: ic(<path d="m15 18-6-6 6-6"/>),
+  chevronDown: ic(<path d="m6 9 6 6 6-6"/>),
+  plus: ic(<path d="M12 5v14M5 12h14"/>),
+  x: ic(<path d="M18 6 6 18M6 6l12 12"/>),
+  eye: ic(<><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></>),
+  eyeOff: ic(<><path d="M3 3l18 18"/><path d="M10.6 5.1A10.4 10.4 0 0 1 12 5c6.5 0 10 7 10 7a15.8 15.8 0 0 1-4 4.9M6.2 6.2C3.5 8 2 12 2 12s3.5 7 10 7c1.6 0 3-.4 4.2-1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></>),
+  search: ic(<><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></>),
+  edit: ic(<><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></>),
+  trash: ic(<><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></>),
+  fingerprint: ic(<><path d="M12 2a7 7 0 0 0-7 7c0 3 1 5 1 8"/><path d="M12 6a5 5 0 0 0-5 5c0 3.5 1.5 5 1.5 7"/><path d="M12 10a3 3 0 0 0-3 3c0 3 1 4 1 6M15 8a5 5 0 0 1 2 4c0 3-1 4-1 7M18 6a8 8 0 0 1 2 6c0 4-1 6-1 6"/></>),
+  lock: ic(<><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></>),
+  camera: ic(<><path d="M4 8h3l2-2h6l2 2h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z"/><circle cx="12" cy="14" r="3.5"/></>),
+  download: ic(<><path d="M12 3v12"/><path d="m6 11 6 6 6-6"/><path d="M5 21h14"/></>),
+  upload: ic(<><path d="M12 21V9"/><path d="m6 13 6-6 6 6"/><path d="M5 3h14"/></>),
+  share: ic(<><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 10.6 6.8-3.7M8.6 13.4l6.8 3.7"/></>),
+  calendar: ic(<><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/></>),
+  qr: ic(<><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3M14 21h3M21 17v4"/></>),
+  filter: ic(<path d="M4 5h16l-6 8v6l-4-2v-4L4 5Z"/>),
+  copy: ic(<><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></>),
+  check: ic(<path d="m5 12 5 5 9-9"/>),
+  building: ic(<><rect x="4" y="3" width="16" height="18" rx="1"/><path d="M9 8h1M14 8h1M9 12h1M14 12h1M9 16h1M14 16h1"/></>),
+  arrowDown: ic(<><path d="M12 4v16"/><path d="m6 14 6 6 6-6"/></>),
+  arrowUp: ic(<><path d="M12 20V4"/><path d="m6 10 6-6 6 6"/></>),
+};
+
+/* =========================================================================
+   SECTION 6: BASE UI COMPONENTS
+========================================================================= */
+function Button({ variant="primary", size="md", className="", children, ...rest }) {
+  const base = "inline-flex items-center justify-center gap-1.5 rounded-xl font-medium transition active:scale-[.97] disabled:opacity-50 disabled:pointer-events-none select-none";
+  const sizes = { sm:"h-9 px-3 text-sm", md:"h-11 px-4 text-[15px]", lg:"h-12 px-5 text-base" };
+  const variants = {
+    primary: { background:"var(--brand)", color:"#fff" },
+    ghost: { background:"var(--card)", color:"var(--text)", border:"1px solid var(--border)" },
+    outline: { background:"transparent", color:"#EA3943", border:"1.5px solid #EA3943" },
+  };
+  return (
+    <button className={`${base} ${sizes[size]} ${className}`} style={variants[variant]} {...rest}>
+      {children}
+    </button>
+  );
+}
+
+function Field({ label, children, hint }) {
+  return (
+    <div className="mb-3">
+      {label && <div className="text-[13px] mb-1.5" style={{color:"var(--muted)"}}>{label}</div>}
+      {children}
+      {hint && <div className="text-[11px] mt-1" style={{color:"var(--muted)"}}>{hint}</div>}
+    </div>
+  );
+}
+function inputStyle() {
+  return {
+    background: "var(--bg)", border:"1px solid var(--border)", color:"var(--text)"
+  };
+}
+function TextInput(props) {
+  return <input {...props}
+    className={"w-full h-11 px-3 rounded-xl outline-none text-[15px] " + (props.className||"")}
+    style={{...inputStyle(), ...(props.style||{})}} />;
+}
+function TextArea(props) {
+  return <textarea {...props}
+    className={"w-full px-3 py-2.5 rounded-xl outline-none text-[15px] resize-none " + (props.className||"")}
+    style={{...inputStyle(), ...(props.style||{})}} />;
+}
+function Select({ value, onChange, options, placeholder }) {
+  return (
+    <select value={value} onChange={e=>onChange(e.target.value)}
+      className="w-full h-11 px-3 rounded-xl outline-none text-[15px]" style={inputStyle()}>
+      {placeholder && <option value="">{placeholder}</option>}
+      {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+    </select>
+  );
+}
+
+function Modal({ open, onClose, title, children, maxW="max-w-md" }) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
+      <div className="absolute inset-0 bg-black/40 anim-fade" onClick={onClose}></div>
+      <div className={`relative w-full ${maxW} sm:mx-4 anim-sheet rounded-t-3xl sm:rounded-3xl overflow-hidden flex flex-col`}
+           style={{background:"var(--card)", maxHeight:"92vh"}}>
+        <div className="flex items-center justify-between px-4 py-3.5 shrink-0" style={{borderBottom:"1px solid var(--border)"}}>
+          <div className="font-bold text-[16px]">{title}</div>
+          <button onClick={onClose} className="w-8 h-8 rounded-full flex items-center justify-center" style={{background:"var(--bg)"}}>
+            <Icons.x size={18} color="var(--text)"/>
+          </button>
+        </div>
+        <div className="overflow-y-auto p-4">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function ListCard({ children, className="" }) {
+  return (
+    <div className={`rounded-2xl overflow-hidden ${className}`} style={{background:"var(--card)", border:"1px solid var(--border)"}}>
+      {children}
+    </div>
+  );
+}
+function ListRow({ avatarText, title, subtitle, right, onClick, danger }) {
+  return (
+    <div onClick={onClick}
+      className="flex items-center gap-3 px-4 py-3 cursor-pointer active:opacity-70"
+      style={{borderBottom:"1px solid var(--border)"}}>
+      {avatarText !== undefined && <Avatar name={avatarText} />}
+      <div className="flex-1 min-w-0">
+        <div className="text-[15px] font-medium truncate" style={{color: danger ? FIXED_COLORS.negative : "var(--text)"}}>{title}</div>
+        {subtitle && <div className="text-[12.5px] truncate" style={{color:"var(--muted)"}}>{subtitle}</div>}
+      </div>
+      {right}
+    </div>
+  );
+}
+function Avatar({ name, size=40 }) {
+  const color = colorForName(name);
+  const letter = (name||"?").trim().charAt(0).toUpperCase();
+  return (
+    <div className="rounded-full flex items-center justify-center shrink-0 font-bold text-white"
+      style={{width:size, height:size, background:color, fontSize:size*0.4}}>
+      {letter}
+    </div>
+  );
+}
+function EmptyState({ text }) {
+  return (
+    <div className="text-center py-10 text-[14px]" style={{color:"var(--muted)"}}>
+      {text}
+    </div>
+  );
+}
+function Badge({ children, color }) {
+  return (
+    <span className="text-[11px] px-2 py-1 rounded-full font-medium" style={{background: color+"20", color}}>
+      {children}
+    </span>
+  );
+}
+
+/* ---- DatePicker (Jalali) ---- */
+function DatePicker({ value, onChange, lang }) {
+  const [open, setOpen] = useState(false);
+  const j = value ? isoToJalali(value) : (()=>{ const t=todayISO(); return isoToJalali(t); })();
+  const [vy, setVy] = useState(j[0]);
+  const [vm, setVm] = useState(j[1]);
+
+  function daysInMonth(jy, jm) {
+    if (jm <= 6) return 31;
+    if (jm <= 11) return 30;
+    const isLeap = ((jy % 33) % 4 === 1);
+    return isLeap ? 30 : 29;
+  }
+  const dim = daysInMonth(vy, vm);
+  const firstDayISO = jalaliToISO(vy, vm, 1);
+  const firstDate = new Date(firstDayISO+"T00:00:00");
+  const startOffset = (firstDate.getDay()+1)%7; // convert to Sat-start week
+
+  return (
+    <div className="relative">
+      <button type="button" onClick={()=>setOpen(o=>!o)}
+        className="w-full h-11 px-3 rounded-xl flex items-center justify-between text-[15px]" style={inputStyle()}>
+        <span>{value ? formatJalali(value) : tr(lang,"date")}</span>
+        <Icons.calendar size={18} color="var(--muted)"/>
+      </button>
+      {open && (
+        <div className="absolute z-30 mt-1 w-72 rounded-2xl shadow-xl p-3" style={{background:"var(--card)", border:"1px solid var(--border)"}}>
+          <div className="flex items-center justify-between mb-2">
+            <button onClick={()=>{ if(vm===1){setVm(12);setVy(vy-1);} else setVm(vm-1); }} className="p-1"><Icons.chevronRight size={20}/></button>
+            <div className="font-bold text-sm">{JMONTHS[vm-1]} {toFa(vy)}</div>
+            <button onClick={()=>{ if(vm===12){setVm(1);setVy(vy+1);} else setVm(vm+1); }} className="p-1"><Icons.chevronLeft size={20}/></button>
+          </div>
+          <div className="grid grid-cols-7 gap-1 text-center text-[11px] mb-1" style={{color:"var(--muted)"}}>
+            {["ش","ی","د","س","چ","پ","ج"].map(d=><div key={d}>{d}</div>)}
+          </div>
+          <div className="grid grid-cols-7 gap-1">
+            {Array.from({length:startOffset}).map((_,i)=><div key={"e"+i}></div>)}
+            {Array.from({length:dim}).map((_,i)=>{
+              const d = i+1;
+              const iso = jalaliToISO(vy,vm,d);
+              const selected = iso === value;
+              return (
+                <button key={d} onClick={()=>{ onChange(iso); setOpen(false); }}
+                  className="h-8 rounded-lg text-[13px] tnum"
+                  style={{background: selected ? "var(--brand)" : "transparent", color: selected ? "#fff" : "var(--text)"}}>
+                  {toFa(d)}
+                </button>
+              );
+            })}
+          </div>
+          <button onClick={()=>{ onChange(todayISO()); setOpen(false); }} className="w-full mt-2 text-[12px] py-1.5 rounded-lg" style={{color:"var(--brand)"}}>
+            امروز
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* =========================================================================
+   SECTION 7: LOCK SCREEN
+========================================================================= */
+function LockScreen({ onUnlock, lang }) {
+  const [pin, setPin] = useState("");
+  const [err, setErr] = useState(false);
+  const security = readSync(KEYS.security, {});
+  async function simpleHash(str) {
+    const enc = new TextEncoder().encode(str);
+    const buf = await crypto.subtle.digest("SHA-256", enc);
+    return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
+  }
+  async function check(p) {
+    const h = await simpleHash(p);
+    if (h === security.pinHash) { onUnlock(); }
+    else { setErr(true); setPin(""); setTimeout(()=>setErr(false), 1200); }
+  }
+  function press(d) {
+    if (pin.length >= 8) return;
+    const np = pin + d;
+    setPin(np);
+    if (np.length >= 4) setTimeout(()=>check(np), 150);
+  }
+  const bio = security.bioEnabled;
+  return (
+    <div className="fixed inset-0 z-40 flex flex-col items-center justify-center safe-top safe-bottom"
+      style={{background:"linear-gradient(160deg,var(--brandDark),var(--brand))"}}>
+      <div className="w-16 h-16 rounded-2xl bg-white/20 flex items-center justify-center mb-4">
+        <Icons.lock size={30} color="#fff"/>
+      </div>
+      <div className="text-white font-bold text-lg mb-1">{tr(lang,"appLocked")}</div>
+      <div className="text-white/80 text-sm mb-6">{tr(lang,"enterPin")}</div>
+      <div className="flex gap-3 mb-8">
+        {Array.from({length:4}).map((_,i)=>(
+          <div key={i} className="w-3.5 h-3.5 rounded-full" style={{
+            background: pin.length>i ? (err?"#EA3943":"#fff") : "rgba(255,255,255,.3)"
+          }}></div>
+        ))}
+      </div>
+      {err && <div className="text-white bg-red-500/40 px-3 py-1 rounded-lg text-sm mb-4">{tr(lang,"wrongPin")}</div>}
+      <div className="grid grid-cols-3 gap-4">
+        {[1,2,3,4,5,6,7,8,9].map(n=>(
+          <button key={n} onClick={()=>press(String(n))}
+            className="w-16 h-16 rounded-full bg-white/15 text-white text-xl font-bold active:bg-white/30">
+            {toFa(n)}
+          </button>
+        ))}
+        <div></div>
+        <button onClick={()=>press("0")} className="w-16 h-16 rounded-full bg-white/15 text-white text-xl font-bold active:bg-white/30">۰</button>
+        <button onClick={()=>setPin(p=>p.slice(0,-1))} className="w-16 h-16 rounded-full flex items-center justify-center text-white">
+          <Icons.x size={22}/>
+        </button>
+      </div>
+      {bio && (
+        <button onClick={onUnlock} className="mt-8 flex items-center gap-2 text-white/90 text-sm">
+          <Icons.fingerprint size={20}/> {tr(lang,"fingerprintLogin")}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/* =========================================================================
+   SECTION 8: HEADER, DRAWER, REMINDERS
+========================================================================= */
+function WaveDivider() {
+  return (
+    <svg viewBox="0 0 400 24" className="w-full block" style={{marginTop:-1}} preserveAspectRatio="none" height="18">
+      <path d="M0 12 Q 50 24 100 12 T 200 12 T 300 12 T 400 12 V24 H0 Z" fill="var(--bg)"/>
+    </svg>
+  );
+}
+function Header({ lang, onMenu, onBell, reminders, appName }) {
+  const urgent = reminders.some(r => r.days <= 0);
+  const soon = reminders.some(r => r.days === 1);
+  return (
+    <div className="sticky top-0 z-20 safe-top">
+      <div className="px-4 pt-3 pb-4 flex items-center justify-between"
+        style={{background:"linear-gradient(135deg,var(--brand),var(--brandDark))"}}>
+        <div className="flex items-center gap-2">
+          <button onClick={onMenu} className="text-white p-1"><Icons.menu size={22}/></button>
+          <span className="text-white font-bold text-[16px]">{appName}</span>
+        </div>
+        <div></div>
+        <button onClick={onBell} className="relative text-white p-1">
+          <Icons.bell size={22}/>
+          {reminders.length>0 && (
+            <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full"
+              style={{background: urgent?"#EA3943":(soon?"#F59E0B":"#F59E0B")}}></span>
+          )}
+        </button>
+      </div>
+      <WaveDivider/>
+    </div>
+  );
+}
+
+function Drawer({ open, onClose, lang, appName, go, brandInvoiceLogo }) {
+  if (!open) return null;
+  const items = [
+    { id:"personalInvoice", icon:Icons.invoice, label:tr(lang,"personalInvoice"), go:()=>go("invoices",{personal:true}) },
+    { id:"warehouse", icon:Icons.box, label:tr(lang,"warehouse"), go:()=>go("inventoryReport") },
+    { id:"settings", icon:Icons.settings, label:tr(lang,"settings"), go:()=>go("settings") },
+  ];
+  return (
+    <div className="fixed inset-0 z-40">
+      <div className="absolute inset-0 bg-black/40 anim-fade" onClick={onClose}></div>
+      <div className="absolute top-0 right-0 h-full w-72 anim-sheet safe-top safe-bottom flex flex-col"
+        style={{background:"var(--card)", animation:"slideUp .01s"}}>
+        <div className="p-5" style={{background:"linear-gradient(135deg,var(--brand),var(--brandDark))"}}>
+          <Avatar name={appName} size={48}/>
+          <div className="text-white font-bold text-lg mt-3">{appName}</div>
+          <div className="text-white/80 text-sm">{tr(lang,"financeMgmt")}</div>
+        </div>
+        <div className="flex-1 overflow-y-auto py-2">
+          {items.map(it => (
+            <div key={it.id} onClick={()=>{ it.go(); onClose(); }}
+              className="flex items-center gap-3 px-5 py-3.5 cursor-pointer active:opacity-70">
+              <it.icon size={20} color="var(--brand)"/>
+              <span className="text-[15px]">{it.label}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RemindersPanel({ open, onClose, lang, reminders, go }) {
+  return (
+    <Modal open={open} onClose={onClose} title={tr(lang,"reminders")}>
+      {reminders.length === 0 ? <EmptyState text={tr(lang,"noReminders")} /> : (
+        <div className="space-y-2">
+          {reminders.map(r => (
+            <div key={r.id} onClick={()=>{ go("ledger"); onClose(); }}
+              className="flex items-center justify-between p-3 rounded-xl cursor-pointer"
+              style={{background: r.days<=0 ? "#EA394315" : "#F59E0B15"}}>
+              <div>
+                <div className="text-[14px] font-medium">{r.party}</div>
+                <div className="text-[12px]" style={{color:"var(--muted)"}}>{formatJalali(r.dueDate)}</div>
+              </div>
+              <div className="tnum font-bold text-[14px]" style={{color: r.days<=0 ? "#EA3943" : "#F59E0B"}}>
+                {toMoney(r.amount)}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+/* =========================================================================
+   SECTION 9: BOTTOM NAV
+========================================================================= */
+function BottomNav({ tab, setTab, lang }) {
+  const tabs = [
+    { id:"dashboard", icon:Icons.home, label:tr(lang,"home") },
+    { id:"ledger", icon:Icons.wallet, label:tr(lang,"ledger") },
+    { id:"income", icon:Icons.trendUp, label:tr(lang,"income") },
+    { id:"invoices", icon:Icons.invoice, label:tr(lang,"invoices") },
+    { id:"management", icon:Icons.users, label:tr(lang,"management") },
+  ];
+  return (
+    <div className="fixed bottom-0 left-0 right-0 z-20 safe-bottom" style={{background:"var(--card)", borderTop:"1px solid var(--border)"}}>
+      <div className="flex">
+        {tabs.map(t=>{
+          const active = tab === t.id;
+          return (
+            <button key={t.id} onClick={()=>setTab(t.id)} className="flex-1 flex flex-col items-center py-2 gap-0.5">
+              <t.icon size={21} color={active?"var(--brand)":"var(--muted)"}/>
+              <span className="text-[10.5px]" style={{color: active?"var(--brand)":"var(--muted)", fontWeight: active?600:400}}>{t.label}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================================
+   SECTION 10: DASHBOARD
+========================================================================= */
+function Dashboard({ lang, data, go }) {
+  const [hidden, setHidden] = useState(readSync(KEYS.amountHidden, false));
+  const [chartMode, setChartMode] = useState(readSync(KEYS.chartMode, "bar"));
+
+  const openDebt = data.ledger.filter(l=>l.type==="debt").reduce((s,l)=>s + remainingOf(l), 0);
+  const openCredit = data.ledger.filter(l=>l.type==="credit").reduce((s,l)=>s + remainingOf(l), 0);
+  const totalIncome = data.incomes.reduce((s,i)=>s+Number(i.amount||0), 0);
+  const overdueInvoices = data.invoices.filter(i=>!i.paid && i.dueDate && daysDiff(i.dueDate) <= 0).length;
+  const netWorth = openCredit + totalIncome - openDebt;
+
+  function toggleHidden() { const v=!hidden; setHidden(v); writeSync(KEYS.amountHidden, v); }
+  function toggleChart() { const v = chartMode==="bar"?"line":"bar"; setChartMode(v); writeSync(KEYS.chartMode, v); }
+
+  const recent = useMemo(()=>{
+    const a = data.ledger.map(l=>({ id:l.id, kind: l.type==="debt"?"neg":"pos", title:l.party, sub:l.note, amount:remainingOf(l), date:l.date }));
+    const b = data.incomes.map(i=>({ id:i.id, kind:"pos", title: tr(lang, sourceKey(i.source)) || i.source, sub:"", amount:i.amount, date:i.date }));
+    return [...a,...b].sort((x,y)=> (y.date||"").localeCompare(x.date||"")).slice(0,8);
+  }, [data]);
+
+  const barData = useMemo(()=>{
+    // group by last 6 months (jalali)
+    const map = {};
+    const all = [...data.ledger.map(l=>({date:l.date, amount: l.type==="credit"?l.amount:-l.amount})), ...data.incomes.map(i=>({date:i.date, amount:i.amount}))];
+    all.forEach(r=>{
+      if(!r.date) return;
+      const j = isoToJalali(r.date);
+      const key = j[0]+"-"+j[1];
+      map[key] = (map[key]||0) + r.amount;
+    });
+    const keys = Object.keys(map).sort().slice(-6);
+    return keys.map(k=>({ label: JMONTHS[Number(k.split("-")[1])-1].slice(0,3), value: map[k] }));
+  }, [data]);
+  const maxVal = Math.max(1, ...barData.map(d=>Math.abs(d.value)));
+
+  return (
+    <div className="p-4 space-y-4 pb-24">
+      <div className="rounded-2xl p-4" style={{background:"linear-gradient(135deg,var(--brand),var(--brandDark))"}}>
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-white/80 text-[13px]">{tr(lang,"netWorth")}</span>
+          <button onClick={toggleHidden} className="text-white/80"><>{hidden ? <Icons.eyeOff size={18}/> : <Icons.eye size={18}/>}</></button>
+        </div>
+        <div className="text-white text-2xl font-bold tnum mb-3">
+          {hidden ? "••••••" : toMoney(netWorth)}
+        </div>
+        <div className="flex items-end gap-1.5 h-16">
+          {barData.length===0 ? <div className="text-white/50 text-xs">—</div> : barData.map((d,i)=>(
+            <div key={i} className="flex-1 flex flex-col items-center gap-1">
+              <div className="w-full rounded-t-md" style={{
+                height: Math.max(6,(Math.abs(d.value)/maxVal)*48)+"px",
+                background: d.value>=0 ? "rgba(255,255,255,.85)" : "rgba(255,255,255,.4)"
+              }}></div>
+              <span className="text-white/60 text-[9px]">{d.label}</span>
+            </div>
+          ))}
+        </div>
+        <button onClick={toggleChart} className="text-white/70 text-[11px] mt-2 underline">
+          {chartMode==="bar" ? tr(lang,"chartLine") : tr(lang,"chartBar")}
+        </button>
+      </div>
+
+      <div className="grid grid-cols-3 gap-2.5">
+        <MiniStat onClick={()=>go("ledger")} label={tr(lang,"openDebt")} value={toMoney(openDebt)} color={FIXED_COLORS.negative}/>
+        <MiniStat onClick={()=>go("ledger")} label={tr(lang,"openCredit")} value={toMoney(openCredit)} color={FIXED_COLORS.positive}/>
+        <MiniStat onClick={()=>go("invoices")} label={tr(lang,"overdueInvoice")} value={toFa(overdueInvoices)} color={FIXED_COLORS.warning}/>
+      </div>
+
+      <div>
+        <div className="font-bold text-[15px] mb-2">{tr(lang,"recentActivity")}</div>
+        <ListCard>
+          {recent.length===0 ? <EmptyState text={tr(lang,"noRecords")}/> :
+            recent.map(r=>(
+              <ListRow key={r.id} avatarText={r.title} title={r.title} subtitle={r.sub}
+                right={<span className="tnum font-bold text-[13px]" style={{color: r.kind==="pos"?FIXED_COLORS.positive:FIXED_COLORS.negative}}>
+                  {r.kind==="pos"?"+":"-"}{toMoney(r.amount)}
+                </span>} />
+            ))
+          }
+        </ListCard>
+      </div>
+    </div>
+  );
+}
+function sourceKey(s){
+  const map = {"فروش محصول":"sourceSale","حقوق":"sourceSalary","پروژه":"sourceProject","سرمایه‌گذاری":"sourceInvest","سایر":"sourceOther"};
+  return map[s];
+}
+function MiniStat({ label, value, color, onClick }) {
+  return (
+    <button onClick={onClick} className="rounded-2xl p-3 text-right" style={{background:"var(--card)", border:"1px solid var(--border)"}}>
+      <div className="text-[11px] mb-1" style={{color:"var(--muted)"}}>{label}</div>
+      <div className="text-[14px] font-bold tnum" style={{color}}>{value}</div>
+    </button>
+  );
+}
+function remainingOf(entry) {
+  const paid = (entry.payments||[]).reduce((s,p)=>s+Number(p.amount||0),0);
+  return Math.max(0, Number(entry.amount||0) - paid);
+}
+
+/* =========================================================================
+   SECTION 11: LEDGER TAB
+========================================================================= */
+function LedgerTab({ lang, data, reload }) {
+  const [modal, setModal] = useState(false);
+  const [detail, setDetail] = useState(null);
+  const [q, setQ] = useState("");
+  const [form, setForm] = useState(emptyForm());
+  function emptyForm(){ return { type:"debt", party:"", amount:"", note:"", date:todayISO(), dueDate:"" }; }
+
+  function save() {
+    if (!form.party || !form.amount) { alert(tr(lang,"partyRequired")); return; }
+    const list = readSync(KEYS.ledger, []);
+    list.push({ id:uid(), type:form.type, party:form.party, amount:Number(form.amount), note:form.note, date:form.date, dueDate:form.dueDate||null, payments:[] });
+    writeSync(KEYS.ledger, list);
+    setModal(false); setForm(emptyForm()); reload();
+  }
+  function addPayment(entryId, amount, date) {
+    const list = readSync(KEYS.ledger, []);
+    const idx = list.findIndex(l=>l.id===entryId);
+    if (idx>-1) {
+      list[idx].payments = list[idx].payments || [];
+      list[idx].payments.push({ amount:Number(amount), date });
+      writeSync(KEYS.ledger, list);
+      reload();
+      setDetail({...list[idx]});
+    }
+  }
+  function removeEntry(id) {
+    const list = readSync(KEYS.ledger, []).filter(l=>l.id!==id);
+    writeSync(KEYS.ledger, list);
+    reload(); setDetail(null);
+  }
+
+  const filtered = data.ledger.filter(l => l.party.toLowerCase().includes(q.toLowerCase()))
+    .sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+
+  return (
+    <div className="p-4 pb-24 space-y-3">
+      <div className="relative">
+        <TextInput placeholder={tr(lang,"searchParty")} value={q} onChange={e=>setQ(e.target.value)} className="pr-10"/>
+        <Icons.search size={18} color="var(--muted)" style={{position:"absolute", right:12, top:12}}/>
+      </div>
+
+      <ListCard>
+        {filtered.length===0 ? <EmptyState text={tr(lang,"noRecords")}/> : filtered.map(l=>{
+          const rem = remainingOf(l);
+          const settled = rem<=0;
+          return (
+            <ListRow key={l.id} avatarText={l.party}
+              onClick={()=>setDetail(l)}
+              title={l.party + (settled ? " ✓" : "")}
+              subtitle={(l.note||"") + " · " + formatJalali(l.date)}
+              right={<span className="tnum font-bold text-[13px]" style={{color: settled ? "var(--muted)" : (l.type==="debt"?FIXED_COLORS.negative:FIXED_COLORS.positive)}}>
+                {l.type==="debt"?"-":"+"}{toMoney(rem)}
+              </span>}
+            />
+          );
+        })}
+      </ListCard>
+
+      <button onClick={()=>setModal(true)}
+        className="fixed bottom-24 left-5 w-14 h-14 rounded-full flex items-center justify-center shadow-lg z-10"
+        style={{background:"var(--brand)"}}>
+        <Icons.plus size={26} color="#fff"/>
+      </button>
+
+      <Modal open={modal} onClose={()=>setModal(false)} title={tr(lang,"addRecord")}>
+        <div className="flex gap-2 mb-3">
+          <button onClick={()=>setForm(f=>({...f,type:"debt"}))} className="flex-1 h-10 rounded-xl text-sm font-medium"
+            style={{background: form.type==="debt"?FIXED_COLORS.negative:"var(--bg)", color: form.type==="debt"?"#fff":"var(--text)"}}>
+            {tr(lang,"debt")}
+          </button>
+          <button onClick={()=>setForm(f=>({...f,type:"credit"}))} className="flex-1 h-10 rounded-xl text-sm font-medium"
+            style={{background: form.type==="credit"?FIXED_COLORS.positive:"var(--bg)", color: form.type==="credit"?"#fff":"var(--text)"}}>
+            {tr(lang,"credit")}
+          </button>
+        </div>
+        <Field label={tr(lang,"party")}><TextInput value={form.party} onChange={e=>setForm(f=>({...f,party:e.target.value}))}/></Field>
+        <Field label={tr(lang,"amount")}><TextInput type="number" value={form.amount} onChange={e=>setForm(f=>({...f,amount:e.target.value}))}/></Field>
+        <Field label={tr(lang,"note")}><TextInput value={form.note} onChange={e=>setForm(f=>({...f,note:e.target.value}))}/></Field>
+        <Field label={tr(lang,"date")}><DatePicker lang={lang} value={form.date} onChange={v=>setForm(f=>({...f,date:v}))}/></Field>
+        <Field label={tr(lang,"dueDate")}><DatePicker lang={lang} value={form.dueDate} onChange={v=>setForm(f=>({...f,dueDate:v}))}/></Field>
+        <Button className="w-full mt-2" onClick={save}>{tr(lang,"save")}</Button>
+      </Modal>
+
+      <Modal open={!!detail} onClose={()=>setDetail(null)} title={detail?.party}>
+        {detail && <LedgerDetail lang={lang} entry={detail} onPay={addPayment} onDelete={removeEntry}/>}
+      </Modal>
+    </div>
+  );
+}
+function LedgerDetail({ lang, entry, onPay, onDelete }) {
+  const [amt, setAmt] = useState("");
+  const [date, setDate] = useState(todayISO());
+  const rem = remainingOf(entry);
+  return (
+    <div>
+      <div className="flex justify-between text-sm mb-1"><span style={{color:"var(--muted)"}}>{tr(lang,"amount")}</span><span className="tnum font-bold">{toMoney(entry.amount)}</span></div>
+      <div className="flex justify-between text-sm mb-1"><span style={{color:"var(--muted)"}}>{tr(lang,"remaining")}</span><span className="tnum font-bold" style={{color: rem<=0?FIXED_COLORS.positive:FIXED_COLORS.negative}}>{toMoney(rem)}</span></div>
+      <div className="flex justify-between text-sm mb-3"><span style={{color:"var(--muted)"}}>{tr(lang,"date")}</span><span>{formatJalali(entry.date)}</span></div>
+      {rem<=0 && <div className="text-[13px] p-2 rounded-lg mb-3" style={{background:FIXED_COLORS.positive+"20", color:FIXED_COLORS.positive}}>{tr(lang,"settledFull")}</div>}
+
+      {(entry.payments||[]).length>0 && (
+        <div className="mb-3">
+          <div className="text-[13px] font-bold mb-1">{tr(lang,"paymentHistory")}</div>
+          {entry.payments.map((p,i)=>(
+            <div key={i} className="flex justify-between text-[13px] py-1" style={{borderBottom:"1px solid var(--border)"}}>
+              <span>{formatJalali(p.date)}</span><span className="tnum">{toMoney(p.amount)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {rem>0 && (
+        <div className="flex gap-2 mb-3">
+          <TextInput type="number" placeholder={tr(lang,"amountPaid")} value={amt} onChange={e=>setAmt(e.target.value)}/>
+          <Button size="sm" onClick={()=>{ if(amt){ onPay(entry.id, amt, date); setAmt(""); } }}>{tr(lang,"addPayment")}</Button>
+        </div>
+      )}
+      <Button variant="outline" className="w-full" onClick={()=>{ if(confirm(tr(lang,"confirm")+"?")) onDelete(entry.id); }}>{tr(lang,"delete")}</Button>
+    </div>
+  );
+}
+
+/* =========================================================================
+   SECTION 12: INCOME TAB
+========================================================================= */
+function IncomeTab({ lang, data, reload }) {
+  const [modal, setModal] = useState(false);
+  const [form, setForm] = useState({ source:tr(lang,"sourceSale"), amount:"", date:todayISO() });
+  const total = data.incomes.reduce((s,i)=>s+Number(i.amount||0),0);
+  const sources = ["sourceSale","sourceSalary","sourceProject","sourceInvest","sourceOther"].map(k=>tr(lang,k));
+
+  function save() {
+    if (!form.amount) return;
+    const list = readSync(KEYS.incomes, []);
+    list.push({ id:uid(), source:form.source, amount:Number(form.amount), date:form.date });
+    writeSync(KEYS.incomes, list);
+    setModal(false); setForm({ source:sources[0], amount:"", date:todayISO() }); reload();
+  }
+  function remove(id) {
+    writeSync(KEYS.incomes, readSync(KEYS.incomes,[]).filter(i=>i.id!==id));
+    reload();
+  }
+  const sorted = [...data.incomes].sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+
+  return (
+    <div className="p-4 pb-24 space-y-3">
+      <div className="rounded-2xl p-4 text-center" style={{background:"var(--card)", border:"1px solid var(--border)"}}>
+        <div className="text-[13px]" style={{color:"var(--muted)"}}>{tr(lang,"totalIncome")}</div>
+        <div className="text-2xl font-bold tnum" style={{color:FIXED_COLORS.positive}}>{toMoney(total)}</div>
+      </div>
+      <ListCard>
+        {sorted.length===0 ? <EmptyState text={tr(lang,"noRecords")}/> : sorted.map(i=>(
+          <ListRow key={i.id} avatarText={i.source} title={i.source} subtitle={formatJalali(i.date)}
+            right={
+              <div className="flex items-center gap-2">
+                <span className="tnum font-bold text-[13px]" style={{color:FIXED_COLORS.positive}}>+{toMoney(i.amount)}</span>
+                <button onClick={(e)=>{e.stopPropagation(); if(confirm(tr(lang,"confirm")+"?")) remove(i.id);}}><Icons.trash size={16} color="var(--muted)"/></button>
+              </div>
+            }/>
+        ))}
+      </ListCard>
+
+      <button onClick={()=>setModal(true)}
+        className="fixed bottom-24 left-5 w-14 h-14 rounded-full flex items-center justify-center shadow-lg z-10"
+        style={{background:"var(--brand)"}}>
+        <Icons.plus size={26} color="#fff"/>
+      </button>
+
+      <Modal open={modal} onClose={()=>setModal(false)} title={tr(lang,"newIncome")}>
+        <Field label={tr(lang,"incomeSource")}>
+          <Select value={form.source} onChange={v=>setForm(f=>({...f,source:v}))} options={sources.map(s=>({value:s,label:s}))}/>
+        </Field>
+        <Field label={tr(lang,"amount")}><TextInput type="number" value={form.amount} onChange={e=>setForm(f=>({...f,amount:e.target.value}))}/></Field>
+        <Field label={tr(lang,"date")}><DatePicker lang={lang} value={form.date} onChange={v=>setForm(f=>({...f,date:v}))}/></Field>
+        <Button className="w-full mt-2" onClick={save}>{tr(lang,"save")}</Button>
+      </Modal>
+    </div>
+  );
+}
+
+/* =========================================================================
+   SECTION 13: INVOICES TAB
+========================================================================= */
+function InvoicesTab({ lang, data, reload, forcePersonal }) {
+  const [modal, setModal] = useState(false);
+  const [view, setView] = useState(null);
+  const [q, setQ] = useState("");
+  const [form, setForm] = useState(emptyInvoice());
+  function emptyInvoice(){ return { customerId:"", items:[{desc:"",unitPrice:"",qty:1}], issueDate:todayISO(), dueDate:"", paid:false }; }
+
+  useEffect(()=>{ if (forcePersonal) setModal(true); }, [forcePersonal]);
+
+  function updateItem(i, key, val) {
+    setForm(f=>{ const items=[...f.items]; items[i] = {...items[i], [key]:val}; return {...f, items}; });
+  }
+  function addItemRow() { setForm(f=>({...f, items:[...f.items, {desc:"",unitPrice:"",qty:1}]})); }
+  function removeItemRow(i) { setForm(f=>({...f, items:f.items.filter((_,idx)=>idx!==i)})); }
+  const invTotal = form.items.reduce((s,it)=>s + (Number(it.unitPrice)||0)*(Number(it.qty)||0), 0);
+
+  function save() {
+    const list = readSync(KEYS.invoices, []);
+    list.push({ id:uid(), customerId: form.customerId||null, items: form.items, issueDate: form.issueDate, dueDate: form.dueDate||null, paid: form.paid });
+    writeSync(KEYS.invoices, list);
+    setModal(false); setForm(emptyInvoice()); reload();
+  }
+  function togglePaid(id) {
+    const list = readSync(KEYS.invoices, []);
+    const idx = list.findIndex(i=>i.id===id);
+    if (idx>-1) { list[idx].paid = !list[idx].paid; writeSync(KEYS.invoices, list); reload(); }
+  }
+  function remove(id) { writeSync(KEYS.invoices, readSync(KEYS.invoices,[]).filter(i=>i.id!==id)); reload(); setView(null); }
+
+  function customerName(id) { const c = data.customers.find(c=>c.id===id); return c ? c.name : tr(lang,"noCustomerInvoice"); }
+  function invoiceTotal(inv) { return inv.items.reduce((s,it)=>s+(Number(it.unitPrice)||0)*(Number(it.qty)||0),0); }
+
+  const filtered = [...data.invoices].filter(inv=>{
+    const name = customerName(inv.customerId);
+    return name.toLowerCase().includes(q.toLowerCase()) || inv.id.includes(q);
+  }).sort((a,b)=>(b.issueDate||"").localeCompare(a.issueDate||""));
+
+  return (
+    <div className="p-4 pb-24 space-y-3">
+      <div className="relative">
+        <TextInput placeholder={tr(lang,"searchCustomerOrInvoice")} value={q} onChange={e=>setQ(e.target.value)} className="pr-10"/>
+        <Icons.search size={18} color="var(--muted)" style={{position:"absolute", right:12, top:12}}/>
+      </div>
+      <ListCard>
+        {filtered.length===0 ? <EmptyState text={tr(lang,"noInvoices")}/> : filtered.map(inv=>(
+          <ListRow key={inv.id} avatarText={customerName(inv.customerId)} onClick={()=>setView(inv)}
+            title={customerName(inv.customerId)} subtitle={formatJalali(inv.issueDate)}
+            right={
+              <div className="text-left">
+                <div className="tnum font-bold text-[13px]">{toMoney(invoiceTotal(inv))}</div>
+                <Badge color={inv.paid?FIXED_COLORS.positive:FIXED_COLORS.warning}>{inv.paid?tr(lang,"paid")+" ✅":tr(lang,"unpaid")+" ⏳"}</Badge>
+              </div>
+            }/>
+        ))}
+      </ListCard>
+
+      <button onClick={()=>setModal(true)}
+        className="fixed bottom-24 left-5 w-14 h-14 rounded-full flex items-center justify-center shadow-lg z-10"
+        style={{background:"var(--brand)"}}>
+        <Icons.plus size={26} color="#fff"/>
+      </button>
+
+      <Modal open={modal} onClose={()=>setModal(false)} title={tr(lang,"newInvoice")}>
+        <Field label={tr(lang,"selectCustomer")}>
+          <Select value={form.customerId} onChange={v=>setForm(f=>({...f,customerId:v}))}
+            placeholder={tr(lang,"noCustomerInvoice")}
+            options={data.customers.map(c=>({value:c.id,label:c.name}))}/>
+        </Field>
+        <div className="text-[13px] font-bold mb-1">{tr(lang,"addItem")}</div>
+        {form.items.map((it,i)=>(
+          <div key={i} className="flex gap-1.5 mb-2 items-center">
+            <TextInput placeholder={tr(lang,"itemDesc")} value={it.desc} onChange={e=>updateItem(i,"desc",e.target.value)} className="flex-[2]"/>
+            <TextInput type="number" placeholder={tr(lang,"unitPrice")} value={it.unitPrice} onChange={e=>updateItem(i,"unitPrice",e.target.value)} className="flex-1 w-[70px]"/>
+            <TextInput type="number" placeholder={tr(lang,"qty")} value={it.qty} onChange={e=>updateItem(i,"qty",e.target.value)} className="w-[60px]"/>
+            <button onClick={()=>removeItemRow(i)}><Icons.x size={16} color="var(--muted)"/></button>
+          </div>
+        ))}
+        <button onClick={addItemRow} className="text-[13px] mb-3" style={{color:"var(--brand)"}}>+ {tr(lang,"addItem")}</button>
+        <Field label={tr(lang,"issueDate")}><DatePicker lang={lang} value={form.issueDate} onChange={v=>setForm(f=>({...f,issueDate:v}))}/></Field>
+        <Field label={tr(lang,"dueDate")}><DatePicker lang={lang} value={form.dueDate} onChange={v=>setForm(f=>({...f,dueDate:v}))}/></Field>
+        <label className="flex items-center gap-2 mb-3 text-[14px]">
+          <input type="checkbox" checked={form.paid} onChange={e=>setForm(f=>({...f,paid:e.target.checked}))}/> {tr(lang,"paid")}
+        </label>
+        <div className="flex justify-between font-bold text-[15px] mb-3 pt-2" style={{borderTop:"1px solid var(--border)"}}>
+          <span>{tr(lang,"total")}</span><span className="tnum">{toMoney(invTotal)}</span>
+        </div>
+        <Button className="w-full" onClick={save}>{tr(lang,"save")}</Button>
+      </Modal>
+
+      <Modal open={!!view} onClose={()=>setView(null)} title={view ? customerName(view.customerId) : ""}>
+        {view && <InvoiceView lang={lang} inv={view} customerName={customerName(view.customerId)} onTogglePaid={()=>togglePaid(view.id)} onDelete={()=>remove(view.id)}/>}
+      </Modal>
+    </div>
+  );
+}
+function InvoiceView({ lang, inv, customerName, onTogglePaid, onDelete }) {
+  const brand = readSync(KEYS.invoiceBrand, {});
+  const total = inv.items.reduce((s,it)=>s+(Number(it.unitPrice)||0)*(Number(it.qty)||0),0);
+  const printRef = useRef();
+  function shareText() {
+    let txt = `${brand.issuerName||""}\n${customerName}\n`;
+    inv.items.forEach(it=> txt += `${it.desc} x${it.qty} = ${toMoney(it.unitPrice*it.qty)}\n`);
+    txt += `${tr(lang,"total")}: ${toMoney(total)}\n${formatJalali(inv.issueDate)}`;
+    if (navigator.share) navigator.share({ text: txt }).catch(()=>{});
+    else { navigator.clipboard.writeText(txt); alert(tr(lang,"copyText")+" ✓"); }
+  }
+  return (
+    <div>
+      <div ref={printRef} className="rounded-xl p-4 mb-3" style={{background:"var(--bg)", border:"1px solid var(--border)"}}>
+        {brand.logo && <img src={brand.logo} className="h-10 mb-2" alt="logo"/>}
+        <div className="font-bold">{brand.issuerName || "—"}</div>
+        <div className="text-[12px]" style={{color:"var(--muted)"}}>{brand.phone} {brand.address}</div>
+        <div className="my-2" style={{borderTop:"1px dashed var(--border)"}}></div>
+        <div className="text-[13px] mb-2">{tr(lang,"party")}: {customerName}</div>
+        {inv.items.map((it,i)=>(
+          <div key={i} className="flex justify-between text-[13px] py-1">
+            <span>{it.desc} × {toFa(it.qty)}</span><span className="tnum">{toMoney(it.unitPrice*it.qty)}</span>
+          </div>
+        ))}
+        <div className="flex justify-between font-bold text-[14px] pt-2 mt-1" style={{borderTop:"1px solid var(--border)"}}>
+          <span>{tr(lang,"total")}</span><span className="tnum">{toMoney(total)}</span>
+        </div>
+        <div className="text-[11px] mt-2" style={{color:"var(--muted)"}}>{formatJalali(inv.issueDate)}</div>
+        {brand.finalNote && <div className="text-[11px] mt-2 italic">{brand.finalNote}</div>}
+      </div>
+      <div className="flex gap-2 mb-2">
+        <Button size="sm" variant="ghost" onClick={()=>window.print()}><Icons.download size={16}/>{tr(lang,"downloadImg")}</Button>
+        <Button size="sm" variant="ghost" onClick={shareText}><Icons.share size={16}/>{tr(lang,"shareInvoice")}</Button>
+        <Button size="sm" variant="ghost" onClick={onTogglePaid}><Icons.check size={16}/>{inv.paid?tr(lang,"unpaid"):tr(lang,"paid")}</Button>
+      </div>
+      <Button variant="outline" className="w-full" onClick={()=>{ if(confirm(tr(lang,"confirm")+"?")) onDelete(); }}>{tr(lang,"delete")}</Button>
+      <div className="text-[11px] mt-2 text-center" style={{color:"var(--muted)"}}>* {tr(lang,"scanQR")}/{tr(lang,"invoiceStatusCheck")} — نیازمند افزودن کتابخانه QR است.</div>
+    </div>
+  );
+}
+
+/* =========================================================================
+   SECTION 14: MANAGEMENT (Customers + Inventory)
+========================================================================= */
+function ManagementTab({ lang, data, reload }) {
+  const [sub, setSub] = useState("customers");
+  return (
+    <div className="pb-24">
+      <div className="p-4 pb-0">
+        <div className="flex rounded-xl p-1" style={{background:"var(--card)", border:"1px solid var(--border)"}}>
+          <button onClick={()=>setSub("customers")} className="flex-1 h-9 rounded-lg text-sm font-medium"
+            style={{background: sub==="customers"?"var(--brand)":"transparent", color: sub==="customers"?"#fff":"var(--text)"}}>
+            {tr(lang,"management_customers")}
+          </button>
+          <button onClick={()=>setSub("inventory")} className="flex-1 h-9 rounded-lg text-sm font-medium"
+            style={{background: sub==="inventory"?"var(--brand)":"transparent", color: sub==="inventory"?"#fff":"var(--text)"}}>
+            {tr(lang,"management_inventory")}
+          </button>
+        </div>
+      </div>
+      {sub==="customers" ? <CustomersPanel lang={lang} data={data} reload={reload}/> : <InventoryPanel lang={lang} data={data} reload={reload}/>}
+    </div>
+  );
+}
+
+function CustomersPanel({ lang, data, reload }) {
+  const [modal, setModal] = useState(false);
+  const [q, setQ] = useState("");
+  const [form, setForm] = useState({ name:"", phone:"", address:"", notes:"" });
+  function save() {
+    if (!form.name) return;
+    const list = readSync(KEYS.customers, []);
+    list.push({ id:uid(), ...form });
+    writeSync(KEYS.customers, list);
+    setModal(false); setForm({ name:"", phone:"", address:"", notes:"" }); reload();
+  }
+  function remove(id) { writeSync(KEYS.customers, readSync(KEYS.customers,[]).filter(c=>c.id!==id)); reload(); }
+  const filtered = data.customers.filter(c=>c.name.includes(q) || (c.phone||"").includes(q));
+
+  return (
+    <div className="p-4 space-y-3">
+      <div className="relative">
+        <TextInput placeholder={tr(lang,"searchNamePhone")} value={q} onChange={e=>setQ(e.target.value)} className="pr-10"/>
+        <Icons.search size={18} color="var(--muted)" style={{position:"absolute", right:12, top:12}}/>
+      </div>
+      <ListCard>
+        {filtered.length===0 ? <EmptyState text={tr(lang,"noCustomers")}/> : filtered.map(c=>(
+          <ListRow key={c.id} avatarText={c.name} title={c.name} subtitle={c.phone}
+            right={<button onClick={()=>{if(confirm(tr(lang,"confirm")+"?")) remove(c.id);}}><Icons.trash size={16} color="var(--muted)"/></button>}/>
+        ))}
+      </ListCard>
+      <button onClick={()=>setModal(true)}
+        className="fixed bottom-24 left-5 w-14 h-14 rounded-full flex items-center justify-center shadow-lg z-10"
+        style={{background:"var(--brand)"}}>
+        <Icons.plus size={26} color="#fff"/>
+      </button>
+      <Modal open={modal} onClose={()=>setModal(false)} title={tr(lang,"addCustomer")}>
+        <Field label={tr(lang,"name")}><TextInput value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))}/></Field>
+        <Field label={tr(lang,"phone")}><TextInput value={form.phone} onChange={e=>setForm(f=>({...f,phone:e.target.value}))}/></Field>
+        <Field label={tr(lang,"address")}><TextInput value={form.address} onChange={e=>setForm(f=>({...f,address:e.target.value}))}/></Field>
+        <Field label={tr(lang,"notes")}><TextArea rows={2} value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))}/></Field>
+        <Button className="w-full mt-2" onClick={save}>{tr(lang,"save")}</Button>
+      </Modal>
+    </div>
+  );
+}
+
+function currentQty(item) {
+  const moves = item.moves || [];
+  const delta = moves.reduce((s,m)=> s + (m.type==="in" ? Number(m.qty) : -Number(m.qty)), 0);
+  return Number(item.stock||0) + delta;
+}
+function isLowStock(item) {
+  return Number(item.minStock)>0 && currentQty(item) <= Number(item.minStock);
+}
+
+function InventoryPanel({ lang, data, reload }) {
+  const [modal, setModal] = useState(false);
+  const [moveModal, setMoveModal] = useState(null); // {item, type}
+  const [editItem, setEditItem] = useState(null);
+  const [q, setQ] = useState("");
+  const [catFilter, setCatFilter] = useState("");
+  const [locFilter, setLocFilter] = useState("");
+  const [form, setForm] = useState(emptyItem());
+  function emptyItem(){ return { name:"", category:"", price:"", unit:"", stock:"", minStock:"", location:"", photo:"", notes:"" }; }
+
+  const cats = [...new Set(data.inventory.map(i=>i.category).filter(Boolean))];
+  const locs = [...new Set(data.inventory.map(i=>i.location).filter(Boolean))];
+
+  function saveItem() {
+    if (!form.name) return;
+    const list = readSync(KEYS.inventory, []);
+    if (editItem) {
+      const idx = list.findIndex(i=>i.id===editItem.id);
+      list[idx] = { ...list[idx], ...form, price:Number(form.price)||0, stock:Number(form.stock)||0, minStock:Number(form.minStock)||0 };
+    } else {
+      list.push({ id:uid(), ...form, price:Number(form.price)||0, stock:Number(form.stock)||0, minStock:Number(form.minStock)||0, moves:[] });
+    }
+    writeSync(KEYS.inventory, list);
+    setModal(false); setEditItem(null); setForm(emptyItem()); reload();
+  }
+  function removeItem(id) { writeSync(KEYS.inventory, readSync(KEYS.inventory,[]).filter(i=>i.id!==id)); reload(); }
+  function openEdit(item) { setEditItem(item); setForm({ name:item.name, category:item.category||"", price:item.price, unit:item.unit||"", stock:item.stock, minStock:item.minStock||"", location:item.location||"", photo:item.photo||"", notes:item.notes||"" }); setModal(true); }
+
+  function handlePhoto(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => setForm(f=>({...f, photo:reader.result}));
+    reader.readAsDataURL(file);
+  }
+
+  function addMove(itemId, type, qty, date, note) {
+    const list = readSync(KEYS.inventory, []);
+    const idx = list.findIndex(i=>i.id===itemId);
+    if (idx>-1) {
+      list[idx].moves = list[idx].moves || [];
+      list[idx].moves.push({ id:uid(), type, qty:Number(qty), date, note });
+      writeSync(KEYS.inventory, list);
+      reload();
+    }
+    setMoveModal(null);
+  }
+
+  const filtered = data.inventory.filter(i=>{
+    const s = q.toLowerCase();
+    const matchQ = !s || i.name.toLowerCase().includes(s) || (i.category||"").toLowerCase().includes(s) || (i.location||"").toLowerCase().includes(s);
+    const matchCat = !catFilter || i.category===catFilter;
+    const matchLoc = !locFilter || i.location===locFilter;
+    return matchQ && matchCat && matchLoc;
+  });
+
+  return (
+    <div className="p-4 space-y-3">
+      <div className="relative">
+        <TextInput placeholder={tr(lang,"searchNameCategoryLocation")} value={q} onChange={e=>setQ(e.target.value)} className="pr-10"/>
+        <Icons.search size={18} color="var(--muted)" style={{position:"absolute", right:12, top:12}}/>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <Select value={catFilter} onChange={setCatFilter} placeholder={tr(lang,"category")} options={cats.map(c=>({value:c,label:c}))}/>
+        <Select value={locFilter} onChange={setLocFilter} placeholder={tr(lang,"location")} options={locs.map(c=>({value:c,label:c}))}/>
+      </div>
+
+      <ListCard>
+        {filtered.length===0 ? <EmptyState text={tr(lang,"noItems")}/> : filtered.map(item=>{
+          const qty = currentQty(item);
+          const low = isLowStock(item);
+          return (
+            <div key={item.id} className="px-4 py-3" style={{borderBottom:"1px solid var(--border)"}}>
+              <div className="flex items-center gap-3">
+                {item.photo ? <img src={item.photo} className="w-10 h-10 rounded-lg object-cover"/> : <Avatar name={item.name}/>}
+                <div className="flex-1 min-w-0 cursor-pointer" onClick={()=>openEdit(item)}>
+                  <div className="text-[14px] font-medium truncate">{item.name}</div>
+                  <div className="text-[12px] truncate" style={{color: low?FIXED_COLORS.negative:"var(--muted)"}}>
+                    {[item.category,item.location].filter(Boolean).join(" · ")}
+                    {low && " · "+tr(lang,"lowStockWord")}
+                  </div>
+                </div>
+                <div className="text-left">
+                  <div className="tnum font-bold text-[14px]" style={{color: low?FIXED_COLORS.negative:"var(--text)"}}>{toFa(qty)}</div>
+                  <div className="text-[10px]" style={{color:"var(--muted)"}}>{item.unit}</div>
+                </div>
+              </div>
+              <div className="flex gap-2 mt-2">
+                <button onClick={()=>setMoveModal({item, type:"in"})} className="flex-1 h-8 rounded-lg text-[12px] font-medium" style={{background:FIXED_COLORS.positive+"20", color:FIXED_COLORS.positive}}>{tr(lang,"stockIn")}</button>
+                <button onClick={()=>setMoveModal({item, type:"out"})} className="flex-1 h-8 rounded-lg text-[12px] font-medium" style={{background:FIXED_COLORS.negative+"20", color:FIXED_COLORS.negative}}>{tr(lang,"stockOut")}</button>
+                <button onClick={()=>removeItem(item.id)} className="w-8 h-8 rounded-lg flex items-center justify-center" style={{background:"var(--bg)"}}><Icons.trash size={14} color="var(--muted)"/></button>
+              </div>
+            </div>
+          );
+        })}
+      </ListCard>
+
+      <button onClick={()=>{ setEditItem(null); setForm(emptyItem()); setModal(true); }}
+        className="fixed bottom-24 left-5 w-14 h-14 rounded-full flex items-center justify-center shadow-lg z-10"
+        style={{background:"var(--brand)"}}>
+        <Icons.plus size={26} color="#fff"/>
+      </button>
+
+      <Modal open={modal} onClose={()=>setModal(false)} title={tr(lang,"addItemBtn")}>
+        <Field label={tr(lang,"itemName")}><TextInput value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))}/></Field>
+        <Field label={tr(lang,"category")}><TextInput value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))}/></Field>
+        <div className="grid grid-cols-2 gap-2">
+          <Field label={tr(lang,"price")}><TextInput type="number" value={form.price} onChange={e=>setForm(f=>({...f,price:e.target.value}))}/></Field>
+          <Field label={tr(lang,"unit")}><TextInput value={form.unit} onChange={e=>setForm(f=>({...f,unit:e.target.value}))}/></Field>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <Field label={tr(lang,"initialStock")}><TextInput type="number" value={form.stock} onChange={e=>setForm(f=>({...f,stock:e.target.value}))} disabled={!!editItem}/></Field>
+          <Field label={tr(lang,"minStock")}><TextInput type="number" value={form.minStock} onChange={e=>setForm(f=>({...f,minStock:e.target.value}))}/></Field>
+        </div>
+        <Field label={tr(lang,"location")}><TextInput value={form.location} onChange={e=>setForm(f=>({...f,location:e.target.value}))}/></Field>
+        <Field label={tr(lang,"photo")}>
+          <input type="file" accept="image/*" onChange={handlePhoto}/>
+          {form.photo && <img src={form.photo} className="w-16 h-16 rounded-lg mt-2 object-cover"/>}
+        </Field>
+        <Field label={tr(lang,"notes")}><TextArea rows={2} value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))}/></Field>
+        <Button className="w-full mt-2" onClick={saveItem}>{tr(lang,"save")}</Button>
+      </Modal>
+
+      <Modal open={!!moveModal} onClose={()=>setMoveModal(null)} title={moveModal ? (moveModal.type==="in"?tr(lang,"stockInTitle"):tr(lang,"stockOutTitle")) : ""}>
+        {moveModal && <MoveForm lang={lang} onSave={(qty,date,note)=>addMove(moveModal.item.id, moveModal.type, qty, date, note)}/>}
+      </Modal>
+    </div>
+  );
+}
+function MoveForm({ lang, onSave }) {
+  const [qty, setQty] = useState("");
+  const [date, setDate] = useState(todayISO());
+  const [note, setNote] = useState("");
+  return (
+    <div>
+      <Field label={tr(lang,"qty")}><TextInput type="number" value={qty} onChange={e=>setQty(e.target.value)}/></Field>
+      <Field label={tr(lang,"date")}><DatePicker lang={lang} value={date} onChange={setDate}/></Field>
+      <Field label={tr(lang,"note")}><TextInput value={note} onChange={e=>setNote(e.target.value)}/></Field>
+      <Button className="w-full mt-2" onClick={()=>{ if(qty) onSave(qty,date,note); }}>{tr(lang,"save")}</Button>
+    </div>
+  );
+}
+
+/* =========================================================================
+   SECTION 15: INVENTORY REPORT (standalone page)
+========================================================================= */
+function InventoryReport({ lang, data, goBack }) {
+  const [q, setQ] = useState("");
+  const [showFilters, setShowFilters] = useState(false);
+  const [typeF, setTypeF] = useState("");
+  const [catF, setCatF] = useState("");
+  const [locF, setLocF] = useState("");
+  const [fromD, setFromD] = useState("");
+  const [toD, setToD] = useState("");
+
+  const lowItems = data.inventory.filter(isLowStock);
+  const cats = [...new Set(data.inventory.map(i=>i.category).filter(Boolean))];
+  const locs = [...new Set(data.inventory.map(i=>i.location).filter(Boolean))];
+
+  const allMoves = useMemo(()=>{
+    const out = [];
+    data.inventory.forEach(item=>{
+      (item.moves||[]).forEach(m=> out.push({ ...m, itemName:item.name, category:item.category, location:item.location, unit:item.unit }));
+    });
+    return out.sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+  }, [data]);
+
+  const filteredMoves = allMoves.filter(m=>{
+    const s = q.toLowerCase();
+    const matchQ = !s || m.itemName.toLowerCase().includes(s) || (m.category||"").toLowerCase().includes(s) || (m.location||"").toLowerCase().includes(s) || (m.note||"").toLowerCase().includes(s);
+    const matchType = !typeF || m.type===typeF;
+    const matchCat = !catF || m.category===catF;
+    const matchLoc = !locF || m.location===locF;
+    const matchFrom = !fromD || m.date >= fromD;
+    const matchTo = !toD || m.date <= toD;
+    return matchQ && matchType && matchCat && matchLoc && matchFrom && matchTo;
+  });
+
+  function clearFilters() { setTypeF(""); setCatF(""); setLocF(""); setFromD(""); setToD(""); }
+
+  return (
+    <div className="min-h-screen safe-top safe-bottom" style={{background:"var(--bg)"}}>
+      <div className="sticky top-0 z-20 px-4 py-3 flex items-center gap-3" style={{background:"linear-gradient(135deg,var(--brand),var(--brandDark))"}}>
+        <button onClick={goBack} className="text-white"><Icons.chevronRight size={22}/></button>
+        <span className="text-white font-bold">{tr(lang,"inventoryReport")}</span>
+      </div>
+      <div className="p-4 space-y-4">
+        <div className="text-[11px] text-center" style={{color:"var(--muted)"}}>{tr(lang,"reportOnlyHint")}</div>
+
+        <div>
+          <div className="font-bold text-[15px] mb-2">{tr(lang,"lowStockItems")} ({toFa(lowItems.length)})</div>
+          <ListCard>
+            {lowItems.length===0 ? (
+              <div className="text-center py-8 text-[14px]" style={{color:FIXED_COLORS.positive}}>{tr(lang,"allStockOk")}</div>
+            ) : lowItems.map(item=>(
+              <ListRow key={item.id} avatarText={item.name} title={item.name} subtitle={[item.category,item.location].filter(Boolean).join(" · ")}
+                right={<span className="tnum font-bold text-[13px]" style={{color:FIXED_COLORS.negative}}>{toFa(currentQty(item))}/{toFa(item.minStock)}</span>}/>
+            ))}
+          </ListCard>
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <div className="font-bold text-[15px]">{tr(lang,"moveHistory")} ({toFa(filteredMoves.length)} {tr(lang,"results")})</div>
+            <button onClick={()=>setShowFilters(s=>!s)} className="flex items-center gap-1 text-[12px]" style={{color:"var(--brand)"}}>
+              <Icons.filter size={14}/>{tr(lang,"filters")}
+            </button>
+          </div>
+          <div className="relative mb-2">
+            <TextInput placeholder={tr(lang,"searchNameCategoryLocation")} value={q} onChange={e=>setQ(e.target.value)} className="pr-10"/>
+            <Icons.search size={18} color="var(--muted)" style={{position:"absolute", right:12, top:12}}/>
+          </div>
+          {showFilters && (
+            <div className="rounded-xl p-3 mb-2 space-y-2" style={{background:"var(--card)", border:"1px solid var(--border)"}}>
+              <Select value={typeF} onChange={setTypeF} placeholder={tr(lang,"type")} options={[{value:"in",label:tr(lang,"stockIn")},{value:"out",label:tr(lang,"stockOut")}]}/>
+              <Select value={catF} onChange={setCatF} placeholder={tr(lang,"category")} options={cats.map(c=>({value:c,label:c}))}/>
+              <Select value={locF} onChange={setLocF} placeholder={tr(lang,"location")} options={locs.map(c=>({value:c,label:c}))}/>
+              <div className="grid grid-cols-2 gap-2">
+                <DatePicker lang={lang} value={fromD} onChange={setFromD}/>
+                <DatePicker lang={lang} value={toD} onChange={setToD}/>
+              </div>
+              <button onClick={clearFilters} className="text-[12px]" style={{color:FIXED_COLORS.negative}}>{tr(lang,"clearFilters")}</button>
+            </div>
+          )}
+          <ListCard>
+            {filteredMoves.length===0 ? <EmptyState text={tr(lang,"noRecords")}/> : filteredMoves.map(m=>(
+              <ListRow key={m.id} avatarText={m.itemName} title={m.itemName} subtitle={[m.category,m.location,m.note].filter(Boolean).join(" · ")+" · "+formatJalali(m.date)}
+                right={<span className="tnum font-bold text-[13px]" style={{color: m.type==="in"?FIXED_COLORS.positive:FIXED_COLORS.negative}}>{m.type==="in"?"+":"-"}{toFa(m.qty)} {m.unit}</span>}/>
+            ))}
+          </ListCard>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================================
+   SECTION 16: SETTINGS TAB
+========================================================================= */
+function SettingsTab({ lang, setLang, theme, setTheme, uiPrefs, setUiPrefs, reloadAll }) {
+  const [brand, setBrand] = useState(readSync(KEYS.invoiceBrand, {}));
+  const security = readSync(KEYS.security, {});
+  const [pinModal, setPinModal] = useState(false);
+  const [bioSupported, setBioSupported] = useState(false);
+
+  useEffect(()=>{
+    if (window.PublicKeyCredential) setBioSupported(true);
+  }, []);
+
+  function saveBrand(patch) { const b = {...brand, ...patch}; setBrand(b); writeSync(KEYS.invoiceBrand, b); }
+  function handleLogo(e) {
+    const file = e.target.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => saveBrand({ logo: reader.result });
+    reader.readAsDataURL(file);
+  }
+
+  function downloadBackup() {
+    const backup = {
+      ledger: readSync(KEYS.ledger, []),
+      incomes: readSync(KEYS.incomes, []),
+      invoices: readSync(KEYS.invoices, []),
+      customers: readSync(KEYS.customers, []),
+      inventory: readSync(KEYS.inventory, []),
+      invoiceBrand: readSync(KEYS.invoiceBrand, {}),
+      uiPrefs: readSync(KEYS.uiPrefs, {}),
+      theme: readSync(KEYS.theme, "teal"),
+      security: readSync(KEYS.security, {}),
+    };
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type:"application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "daftarhesab-backup.json"; a.click();
+    URL.revokeObjectURL(url);
+  }
+  function restoreBackup(e) {
+    const file = e.target.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const obj = JSON.parse(reader.result);
+        if (!obj || typeof obj !== "object") throw new Error("bad");
+        if (!confirm(tr(lang,"restoreWarning"))) return;
+        Object.entries({
+          ledger:KEYS.ledger, incomes:KEYS.incomes, invoices:KEYS.invoices, customers:KEYS.customers,
+          inventory:KEYS.inventory, invoiceBrand:KEYS.invoiceBrand, uiPrefs:KEYS.uiPrefs, theme:KEYS.theme, security:KEYS.security
+        }).forEach(([k, storageKey]) => { if (obj[k] !== undefined) writeSync(storageKey, obj[k]); });
+        reloadAll();
+        alert(tr(lang,"confirm")+" ✓");
+      } catch (err) { alert(tr(lang,"invalidBackup")); }
+    };
+    reader.readAsText(file);
+  }
+
+  async function simpleHash(str) {
+    const enc = new TextEncoder().encode(str);
+    const buf = await crypto.subtle.digest("SHA-256", enc);
+    return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
+  }
+
+  return (
+    <div className="p-4 pb-24 space-y-4">
+      <SettingsCard title={tr(lang,"themeDesign")}>
+        <div className="grid grid-cols-3 gap-2.5">
+          {Object.entries(THEMES).map(([key,t])=>(
+            <button key={key} onClick={()=>setTheme(key)}
+              className="rounded-xl p-2.5 flex flex-col items-center gap-1.5"
+              style={{border: theme===key ? `2px solid ${t.brand}` : "1px solid var(--border)"}}>
+              <div className="w-full h-8 rounded-lg" style={{background:`linear-gradient(135deg,${t.brand},${t.brandDark})`}}></div>
+              <span className="text-[11px]">{t.name}</span>
+            </button>
+          ))}
+        </div>
+      </SettingsCard>
+
+      <SettingsCard title={tr(lang,"appLanguage")}>
+        <div className="flex gap-2 mb-2">
+          <button onClick={()=>setLang("fa")} className="flex-1 h-11 rounded-xl font-medium"
+            style={{background: lang==="fa"?"var(--brand)":"var(--bg)", color: lang==="fa"?"#fff":"var(--text)"}}>{tr(lang,"persian")}</button>
+          <button onClick={()=>setLang("ar")} className="flex-1 h-11 rounded-xl font-medium"
+            style={{background: lang==="ar"?"var(--brand)":"var(--bg)", color: lang==="ar"?"#fff":"var(--text)"}}>{tr(lang,"arabic")}</button>
+        </div>
+        <div className="text-[11px]" style={{color:"var(--muted)"}}>{tr(lang,"langHint")}</div>
+      </SettingsCard>
+
+      <SettingsCard title={tr(lang,"fontCustom")}>
+        <Field label={tr(lang,"fontType")}>
+          <Select value={uiPrefs.fontFamily} onChange={v=>setUiPrefs({...uiPrefs, fontFamily:v})}
+            options={[{value:"Vazirmatn",label:"وزیرمتن"},{value:"IranSans",label:"ایرانسنس"},{value:"Tahoma",label:"تاهوما"},{value:"system-ui",label:tr(lang,"systemFont")}]}/>
+        </Field>
+        <Field label={tr(lang,"fontSize")}>
+          <div className="flex gap-2">
+            {[["sm",tr(lang,"small")],["md",tr(lang,"medium")],["lg",tr(lang,"large")]].map(([k,l])=>(
+              <button key={k} onClick={()=>setUiPrefs({...uiPrefs, fontSize:k})} className="flex-1 h-10 rounded-xl text-sm font-medium"
+                style={{background: uiPrefs.fontSize===k?"var(--brand)":"var(--bg)", color: uiPrefs.fontSize===k?"#fff":"var(--text)"}}>{l}</button>
+            ))}
+          </div>
+        </Field>
+      </SettingsCard>
+
+      <SettingsCard title={tr(lang,"invoiceBrand")}>
+        <Field label={tr(lang,"logo")}>
+          <input type="file" accept="image/*" onChange={handleLogo}/>
+          {brand.logo && <img src={brand.logo} className="h-10 mt-2"/>}
+        </Field>
+        <Field label={tr(lang,"issuerName")}><TextInput value={brand.issuerName||""} onChange={e=>saveBrand({issuerName:e.target.value})}/></Field>
+        <Field label={tr(lang,"phone")}><TextInput value={brand.phone||""} onChange={e=>saveBrand({phone:e.target.value})}/></Field>
+        <Field label={tr(lang,"address")}><TextInput value={brand.address||""} onChange={e=>saveBrand({address:e.target.value})}/></Field>
+        <Field label={tr(lang,"taxId")}><TextInput value={brand.taxId||""} onChange={e=>saveBrand({taxId:e.target.value})}/></Field>
+        <Field label={tr(lang,"finalNote")}><TextArea rows={2} value={brand.finalNote||""} onChange={e=>saveBrand({finalNote:e.target.value})}/></Field>
+      </SettingsCard>
+
+      <SettingsCard title={tr(lang,"security")}>
+        <Button variant="ghost" className="w-full mb-2" onClick={()=>setPinModal(true)}>
+          <Icons.lock size={16}/> {security.pinHash ? tr(lang,"changePin") : tr(lang,"setPin")}
+        </Button>
+        {security.pinHash && (
+          <Button variant="outline" className="w-full mb-2" onClick={()=>{ writeSync(KEYS.security,{...security,pinHash:null,bioEnabled:false}); alert(tr(lang,"pinDisabled")); reloadAll(); }}>
+            {tr(lang,"disablePin")}
+          </Button>
+        )}
+        <div className="flex items-center justify-between py-2">
+          <span className="text-[14px] flex items-center gap-2"><Icons.fingerprint size={18}/>{tr(lang,"biometric")}</span>
+          {bioSupported ? (
+            <input type="checkbox" checked={!!security.bioEnabled} onChange={e=>{ writeSync(KEYS.security,{...security,bioEnabled:e.target.checked}); reloadAll(); }}/>
+          ) : <span className="text-[12px]" style={{color:"var(--muted)"}}>{tr(lang,"notAvailableDevice")}</span>}
+        </div>
+      </SettingsCard>
+
+      <SettingsCard title={tr(lang,"backup")}>
+        <Button variant="ghost" className="w-full mb-2" onClick={downloadBackup}><Icons.download size={16}/>{tr(lang,"downloadBackup")}</Button>
+        <label className="block">
+          <div className="h-11 rounded-xl flex items-center justify-center gap-1.5 font-medium cursor-pointer" style={{background:"var(--bg)", border:"1px solid var(--border)"}}>
+            <Icons.upload size={16}/>{tr(lang,"restoreBackup")}
+          </div>
+          <input type="file" accept="application/json" className="hidden" onChange={restoreBackup}/>
+        </label>
+      </SettingsCard>
+
+      <Modal open={pinModal} onClose={()=>setPinModal(false)} title={tr(lang,"setPin")}>
+        <PinForm lang={lang} onSave={async(newPin)=>{
+          const h = await simpleHash(newPin);
+          writeSync(KEYS.security, {...security, pinHash:h});
+          setPinModal(false); alert(tr(lang,"pinSet")); reloadAll();
+        }}/>
+      </Modal>
+    </div>
+  );
+}
+function SettingsCard({ title, children }) {
+  return (
+    <div className="rounded-2xl p-4" style={{background:"var(--card)", border:"1px solid var(--border)"}}>
+      <div className="font-bold text-[15px] mb-3">{title}</div>
+      {children}
+    </div>
+  );
+}
+function PinForm({ lang, onSave }) {
+  const [p1, setP1] = useState("");
+  const [p2, setP2] = useState("");
+  function submit() {
+    if (p1.length < 4) { alert(tr(lang,"pinMinDigits")); return; }
+    if (p1 !== p2) { alert(tr(lang,"pinMismatch")); return; }
+    onSave(p1);
+  }
+  return (
+    <div>
+      <Field label={tr(lang,"newPin")}><TextInput type="password" inputMode="numeric" value={p1} onChange={e=>setP1(e.target.value)}/></Field>
+      <Field label={tr(lang,"confirmPin")}><TextInput type="password" inputMode="numeric" value={p2} onChange={e=>setP2(e.target.value)}/></Field>
+      <Button className="w-full mt-2" onClick={submit}>{tr(lang,"save")}</Button>
+    </div>
+  );
+}
+
+/* =========================================================================
+   SECTION 17: MAIN APP
+========================================================================= */
+function loadAllData() {
+  return {
+    ledger: readSync(KEYS.ledger, []),
+    incomes: readSync(KEYS.incomes, []),
+    invoices: readSync(KEYS.invoices, []),
+    customers: readSync(KEYS.customers, []),
+    inventory: readSync(KEYS.inventory, []),
+  };
+}
+
+function App() {
+  const [uiPrefs, setUiPrefsState] = useState(readSync(KEYS.uiPrefs, { fontFamily:"Vazirmatn", fontSize:"md", language:"fa" }));
+  const [lang, setLangState] = useState(uiPrefs.language || "fa");
+  const [theme, setThemeState] = useState(readSync(KEYS.theme, "teal"));
+  const [tab, setTab] = useState("dashboard");
+  const [page, setPage] = useState(null); // "inventoryReport" | "settings" | null
+  const [data, setData] = useState(loadAllData());
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [bellOpen, setBellOpen] = useState(false);
+  const [personalInvoiceFlag, setPersonalInvoiceFlag] = useState(false);
+  const security = readSync(KEYS.security, {});
+  const [locked, setLocked] = useState(!!security.pinHash);
+
+  useEffect(()=>{ applyThemeVars(theme); }, [theme]);
+  useEffect(()=>{
+    document.documentElement.dir = "rtl";
+    document.documentElement.lang = lang;
+  }, [lang]);
+  useEffect(()=>{
+    document.body.style.fontFamily = `'${uiPrefs.fontFamily}','Vazirmatn','Tahoma',sans-serif`;
+    const sizeMap = { sm:"14px", md:"16px", lg:"18px" };
+    document.documentElement.style.fontSize = sizeMap[uiPrefs.fontSize]||"16px";
+  }, [uiPrefs]);
+
+  useEffect(()=>{
+    const t = setTimeout(()=>{
+      const splash = document.getElementById("splash");
+      if (splash) splash.classList.add("hide");
+    }, 900);
+    return ()=>clearTimeout(t);
+  }, []);
+
+  function reload() { setData(loadAllData()); }
+  function setLang(l) { setLangState(l); const p={...uiPrefs, language:l}; setUiPrefsState(p); writeSync(KEYS.uiPrefs,p); }
+  function setTheme(t) { setThemeState(t); writeSync(KEYS.theme, t); }
+  function setUiPrefs(p) { setUiPrefsState(p); writeSync(KEYS.uiPrefs, p); }
+
+  function go(target, opts) {
+    if (target === "inventoryReport") { setPage("inventoryReport"); return; }
+    if (target === "settings") { setPage(null); setTab("management"); setTimeout(()=>setPage("settingsTab"),0); }
+    setPage(null);
+    setTab(target);
+    if (opts && opts.personal) setPersonalInvoiceFlag(f=>!f);
+  }
+
+  const reminders = useMemo(()=>{
+    return data.ledger
+      .filter(l => l.dueDate && remainingOf(l) > 0)
+      .map(l => ({ ...l, days: daysDiff(l.dueDate), amount: remainingOf(l) }))
+      .filter(l => l.days <= 1)
+      .sort((a,b)=>a.days-b.days);
+  }, [data]);
+
+  if (locked) {
+    return <LockScreen lang={lang} onUnlock={()=>setLocked(false)}/>;
+  }
+
+  if (page === "inventoryReport") {
+    return <InventoryReport lang={lang} data={data} goBack={()=>setPage(null)}/>;
+  }
+
+  return (
+    <div className="min-h-screen" style={{background:"var(--bg)"}}>
+      <Header lang={lang} appName={tr(lang,"appName")} onMenu={()=>setDrawerOpen(true)} onBell={()=>setBellOpen(true)} reminders={reminders}/>
+      <Drawer open={drawerOpen} onClose={()=>setDrawerOpen(false)} lang={lang} appName={tr(lang,"appName")}
+        go={(t,opts)=>{ go(t,opts); }}/>
+      <RemindersPanel open={bellOpen} onClose={()=>setBellOpen(false)} lang={lang} reminders={reminders} go={go}/>
+
+      {tab === "dashboard" && <Dashboard lang={lang} data={data} go={go}/>}
+      {tab === "ledger" && <LedgerTab lang={lang} data={data} reload={reload}/>}
+      {tab === "income" && <IncomeTab lang={lang} data={data} reload={reload}/>}
+      {tab === "invoices" && <InvoicesTab lang={lang} data={data} reload={reload} forcePersonal={personalInvoiceFlag}/>}
+      {tab === "management" && page !== "settingsTab" && <ManagementTab lang={lang} data={data} reload={reload}/>}
+      {page === "settingsTab" && (
+        <SettingsTab lang={lang} setLang={setLang} theme={theme} setTheme={setTheme}
+          uiPrefs={uiPrefs} setUiPrefs={setUiPrefs} reloadAll={()=>{ reload(); setLocked(!!readSync(KEYS.security,{}).pinHash); }}/>
+      )}
+
+      <BottomNav tab={page==="settingsTab" ? "management" : tab} setTab={(t)=>{ setPage(null); setTab(t); }} lang={lang}/>
+    </div>
+  );
+}
+
+/* =========================================================================
+   SECTION 18: PWA - manifest + service worker
+========================================================================= */
+(function setupPWA(){
+  const manifest = {
+    name: "دفترحساب", short_name: "دفترحساب",
+    start_url: ".", display: "standalone", orientation: "portrait",
+    background_color: "#F1F5F4", theme_color: "#14B8A6",
+    icons: [
+      { src: "data:image/svg+xml;base64," + btoa(`<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192"><rect width="192" height="192" rx="40" fill="%2314B8A6"/><text x="96" y="120" font-size="90" text-anchor="middle" fill="white" font-family="sans-serif">د</text></svg>`.replace(/%23/g,"#")), sizes:"192x192", type:"image/svg+xml", purpose:"any maskable" },
+      { src: "data:image/svg+xml;base64," + btoa(`<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"><rect width="512" height="512" rx="100" fill="#14B8A6"/><text x="256" y="320" font-size="240" text-anchor="middle" fill="white" font-family="sans-serif">د</text></svg>`), sizes:"512x512", type:"image/svg+xml", purpose:"any maskable" }
+    ]
+  };
+  const blob = new Blob([JSON.stringify(manifest)], { type:"application/json" });
+  document.getElementById("manifestLink").href = URL.createObjectURL(blob);
+
+  if ("serviceWorker" in navigator) {
+    const swCode = `
+      const CACHE = "daftarhesab-v1";
+      self.addEventListener("install", e => { self.skipWaiting(); });
+      self.addEventListener("activate", e => { self.clients.claim(); });
+      self.addEventListener("fetch", e => {
+        e.respondWith(
+          caches.open(CACHE).then(cache =>
+            cache.match(e.request).then(res => res || fetch(e.request).then(fresh => {
+              if (e.request.method === "GET") cache.put(e.request, fresh.clone());
+              return fresh;
+            }).catch(()=> res))
+          )
+        );
+      });
+    `;
+    const swBlob = new Blob([swCode], { type: "application/javascript" });
+    const swUrl = URL.createObjectURL(swBlob);
+    navigator.serviceWorker.register(swUrl).catch(()=>{});
+  }
+})();
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
